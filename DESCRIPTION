@@ -1,0 +1,29 @@
+Package: gmstools
+Type: Package
+Title: Tools for Online Wildlife Trade Monitoring and Analysis
+Version: 0.0.0.9000
+Authors@R: 
+    person(given = "Russell",
+           family = "Gray",
+           email = "russell.gray@globalinitiative.net",
+           role = c("aut", "cre"))
+Description: A toolkit developed for the Global Monitoring System (GMS) to streamline the detection, analysis, and visualization of online illegal wildlife trade data. Includes standardized functions for data cleaning, flag plots, platform-specific trend analysis, quadrant movement tracking, and model diagnostics. Built for consistent use across GMS Data Hub investigations and law enforcement intelligence reports.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.1
+Imports:
+    sf,
+    tidyverse,
+    readxl,
+    dplyr,
+    plotly,
+    htmlwidgets,
+    scales,
+    colorspace
+Suggests:
+    testthat,
+    knitr,
+    rmarkdown
+Config/testthat/edition: 3
