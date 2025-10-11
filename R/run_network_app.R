@@ -161,7 +161,7 @@ run_network_app <- function(){# app.R — Two-tab OSINT Friend Networks (v5, mod
       tabPanel(
         title = "Step 1. Parse Friend Networks",
         tags$p("Open the person's profile → Friends, scroll to the bottom to load all entries, ",
-               "then in your browser: ", tags$strong("File → Save Page As… → Webpage, HTML Only"), "."),
+               "then in your browser: ", tags$strong("File → Save Page As… → Webpage, Complete"), "."),
         tags$hr(),
         fluidRow(
           column(5,
@@ -470,3 +470,4 @@ run_network_app <- function(){# app.R — Two-tab OSINT Friend Networks (v5, mod
   
   shinyApp(ui, server)
 }
+
