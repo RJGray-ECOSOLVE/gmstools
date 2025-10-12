@@ -1,9 +1,10 @@
 run_network_app <- function(){
-  # app.R — OSINT Friend Networks (v9.6)
+# app.R — OSINT Friend Networks (v9.6)  [fix: restore Step 2 vetting modal + actions]
 # Key changes from v9.5:
 # - Enrichment table uses Scroller with paging=TRUE (required), pagination UI hidden via dom="fti".
 # - Save metadata now updates the table via dataTableProxy + replaceData(resetPaging=FALSE),
 #   so the scroll position (and selection) are preserved and no warning appears.
+# - FIX: Step 2 vetting modal restored (View Profile / Accept / Reject / Uncertain)
 
 options(shiny.maxRequestSize = 1024^3)
 options(shiny.launch.browser = TRUE)
@@ -366,7 +367,7 @@ server <- function(input, output, session){
   loc_coords <- reactiveVal(c(NA_real_, NA_real_))
   geocode_cache <- reactiveVal(list())
   
-  # NEW: a separate reactive for the displayed table data (to avoid re-render on save)
+  # Separate reactive for displayed enrichment table (avoid re-render on save)
   meta_table_data <- reactiveVal(tibble(
     POI=character(), Name=character(), URL=character(), Context=character(),
     Phone=character(), Email=character(), Species=character(), Location=character()
@@ -400,7 +401,6 @@ server <- function(input, output, session){
     updateSelectInput(session, "saved_choice", choices = names(sn), selected = if (length(sn)) names(sn)[1] else "")
     updateCheckboxGroupInput(session, "include_networks", selected = names(sn))
     
-    # refresh table display from loaded meta_df
     if (nrow(md)) {
       out <- md %>% arrange(desc(is_poi), name) %>%
         transmute(POI = ifelse(is_poi, "Yes", ""), Name = name, URL = profile_link, Context = context,
@@ -670,8 +670,63 @@ server <- function(input, output, session){
       )
   })
   
+  # --- Step 2: Node modal + vetting actions (restored) ---
+  observeEvent(input$node_click, {
+    req(input$node_click)
+    nd <- tryCatch(network_data(), error = function(e) NULL); req(!is.null(nd))
+    node <- nd$nodes[nd$nodes$id == input$node_click, , drop = FALSE]; req(nrow(node) == 1)
+    
+    nm     <- node$label %||% node$id
+    ctx    <- node$context %||% NA_character_
+    link   <- node$profile_link %||% NA_character_
+    is_poi <- isTRUE(node$is_poi)
+    
+    current_node(as.character(node$id))
+    js_url <- gsub("'", "\\'", link, fixed = TRUE)
+    
+    showModal(
+      modalDialog(
+        easyClose = TRUE, footer = NULL,
+        div(
+          h4(esc(nm), style = "margin-top:0;"),
+          if (!is.na(ctx) && nzchar(ctx)) tags$p(tags$em(esc(ctx))),
+          if (is_poi) tags$p(tags$small(tags$b("POI (central node)"))),
+          tags$hr(),
+          div(
+            class = "btn-toolbar", style = "gap:8px; display:flex; flex-wrap:wrap;",
+            if (!is.na(link) && nzchar(link)) tags$button(
+              type = "button", class = "btn btn-primary",
+              onclick = sprintf("window.open('%s','_blank','noopener');", js_url), "View Profile"
+            ),
+            if (!isTRUE(is_poi)) actionButton("confirm_node",   label = tagList(icon("thumbs-up"), "Accept"),   class = "btn btn-primary"),
+            if (!isTRUE(is_poi)) actionButton("reject_node",    label = tagList(icon("times"),     "Reject"),    class = "btn btn-danger"),
+            if (!isTRUE(is_poi)) actionButton("uncertain_node", label = tagList(icon("question"),  "Uncertain"), class = "btn btn-info")
+          )
+        )
+      )
+    )
+  }, ignoreInit = TRUE)
+  
+  observeEvent(input$confirm_node, {
+    id <- current_node(); req(id)
+    v <- vetting(); v[id] <- "accept"; vetting(v)
+    removeModal()
+  }, ignoreInit = TRUE)
+  
+  observeEvent(input$reject_node, {
+    id <- current_node(); req(id)
+    v <- vetting(); v[id] <- "reject"; vetting(v)
+    removeModal()
+  }, ignoreInit = TRUE)
+  
+  observeEvent(input$uncertain_node, {
+    id <- current_node(); req(id)
+    v <- vetting(); v[id] <- "uncertain"; vetting(v)
+    removeModal()
+  }, ignoreInit = TRUE)
+  # --- End Step 2 modal block ---
+  
   # ---------------- Step 3: Enrichment (Table) ----------------
-  # Rebuild the enrichment dataset when the network/vetting changes (structure-level changes)
   observeEvent(list(network_data(), vetting()), {
     nd <- tryCatch(network_data(), error = function(e) NULL)
     if (is.null(nd)) {
@@ -711,7 +766,7 @@ server <- function(input, output, session){
       Species = species,
       Location = location
     )
-    meta_table_data(out)  # triggers a one-time re-render when the structure really changes
+    meta_table_data(out)
   }, ignoreInit = FALSE)
   
   output$meta_table <- renderDT({
@@ -723,18 +778,17 @@ server <- function(input, output, session){
       rownames  = FALSE,
       extensions = c('Scroller'),
       options = list(
-        scrollY = 400,      # baseline; CSS sets max-height to ~72vh
-        scroller = TRUE,    # requires paging=TRUE
+        scrollY = 400,
+        scroller = TRUE,
         deferRender = TRUE,
-        paging = TRUE,      # must be TRUE for Scroller
-        stateSave = TRUE,   # keep search/order/scroll
-        dom = "fti",        # hide pagination controls while paging stays enabled
+        paging = TRUE,      # required by Scroller
+        stateSave = TRUE,
+        dom = "fti",        # hides pagination UI
         scrollX = TRUE
       )
     )
   }, server = TRUE)
   
-  # convenient alias
   meta_proxy <- dataTableProxy("meta_table")
   
   observeEvent(input$meta_table_rows_selected, {
@@ -742,7 +796,6 @@ server <- function(input, output, session){
     out <- meta_table_data()
     df  <- meta_df()
     if (length(s) != 1 || !nrow(out) || !nrow(df)) return()
-    # Use Name+URL as a stable key
     key_name <- out$Name[s]; key_url <- out$URL[s]
     row <- df %>% filter(name == key_name, profile_link == key_url) %>% slice(1)
     if (!nrow(row)) return()
@@ -816,7 +869,6 @@ server <- function(input, output, session){
     id <- meta_selected_id(); req(id)
     df <- meta_df(); req(nrow(df))
     
-    # find the row to update using current selection in the displayed table
     s <- input$meta_table_rows_selected
     out_disp <- meta_table_data()
     if (length(s) != 1 || !nrow(out_disp)) { showNotification("Select a row first.", type="warning"); return() }
@@ -832,7 +884,6 @@ server <- function(input, output, session){
     df$lat[idx]      <- coords[1]; df$lng[idx] <- coords[2]
     meta_df(df)  # persist
     
-    # Build a refreshed display table (do NOT trigger a re-render)
     out_new <- df %>% arrange(desc(is_poi), name) %>% transmute(
       POI = ifelse(is_poi, "Yes", ""),
       Name = name,
@@ -844,7 +895,7 @@ server <- function(input, output, session){
       Location = location
     )
     replaceData(meta_proxy, out_new, resetPaging = FALSE, rownames = FALSE)
-    selectRows(meta_proxy, s)  # keep selection on the same row index
+    selectRows(meta_proxy, s)
     
     showNotification("Saved.", type = "message")
   })
@@ -1001,3 +1052,4 @@ server <- function(input, output, session){
 
 shinyApp(ui, server)
 }
+
