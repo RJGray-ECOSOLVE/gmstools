@@ -1,4 +1,4 @@
-run_network_app <- function(){
+run_network_appV2 <- function(){
   # app.R — OSINT Friend Networks (v9.7)
 # Changes from v9.6:
 # - Step 0 loader now accepts MULTIPLE .rds files and merges them into the current session.
