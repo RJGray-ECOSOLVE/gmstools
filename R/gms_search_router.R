@@ -1,3 +1,4 @@
+gms_search_router <- function(){
 # app.R — GMS Search Router (Google dorking + fixed per-row Open buttons)
 # install.packages(c("shiny","DT","dplyr","purrr","tibble","stringr","glue",
 #                    "curl","readr","tidyr","shinyWidgets"))
@@ -435,3 +436,4 @@ server <- function(input, output, session){
 }
 
 shinyApp(ui, server)
+}
