@@ -1,7 +1,7 @@
 gms_kpi_paragraph <- function(data,
                               taxa_col     = "item_taxa",
                               platform_col = "platform_name",
-                              cites_col    = "item_CITES",
+                              cites_col    = "item_cites",
                               language_col = NULL,       # e.g., "language" if present
                               hub_col      = NULL) {     # e.g., "data_hub" if present
   # --- helpers ---
