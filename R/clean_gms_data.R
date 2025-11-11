@@ -76,6 +76,7 @@ clean_gms_data <- function(
       y <- x %>% as.character() %>% str_replace_all("\u00A0", " ") %>% str_squish() %>% str_to_lower()
       out <- dplyr::case_when(
         str_detect(y, "^mamm(al|als)?$")                         ~ "Mammals",
+        str_detect(y, "unspecified")                             ~ "Mammals",
         str_detect(y, "^bird(s)?$|\\baves\\b")                   ~ "Birds",
         str_detect(y, "^reptil(e|es)$|squamata|testudines")      ~ "Reptiles",
         str_detect(y, "^amphib(ian|ians)?$|anura|caudata")       ~ "Amphibians",
@@ -194,3 +195,4 @@ clean_gms_data <- function(
   
   as_tibble(data)
 }
+
