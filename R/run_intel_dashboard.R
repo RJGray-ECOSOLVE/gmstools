@@ -1,6 +1,3 @@
-# In your gmstools package, put this in R/run_intel_dashboard.R
-# And put your flexdashboard Rmd in inst/intel_dashboard/Intel_App.Rmd
-
 #' Launch the Online IWT Intelligence Dashboard
 #'
 #' This will open the flexdashboard (Shiny runtime) in the user's default browser.
@@ -41,3 +38,4 @@ run_intel_dashboard <- function(launch.browser = TRUE, port = NULL) {
     shiny_args = shiny_args
   )
 }
+
