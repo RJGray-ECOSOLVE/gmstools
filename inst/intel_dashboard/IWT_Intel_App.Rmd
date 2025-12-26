@@ -1249,7 +1249,7 @@ actionButton("reset_filters", "Reset filters")
 div(
   style = "margin-top: 12px; font-size: 10px; line-height: 1.2; color: #8fa3c8;",
   HTML(
-    "Version 1.1 (BETA)<br/>",
+    "Version 1.1 (BETA) 2026<br/>",
     "Developed by Russell Gray - Head of Data<br/>",
     "ECOSOLVE | Global Initiative Against Transnational Organized Crime (GI-TOC)"
   )
