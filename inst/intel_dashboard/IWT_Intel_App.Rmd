@@ -1,0 +1,4594 @@
+---
+title: "Online IWT Intelligence Dashboard"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    theme: darkly
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+# ===============================
+# Setup
+# ===============================
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+# increase the upload size
+options(shiny.maxRequestSize = 50 * 1024^2)  # 50 MB
+
+required_packages <- c(
+  "flexdashboard",
+  "shiny",
+  "shinyjs",
+  "tidyverse",
+  "leaflet",
+  "plotly",
+  "visNetwork",
+  "DT",
+  "stringr",
+  "tidyr",
+  "sf",
+  "rnaturalearth",
+  "rnaturalearthdata",
+  "htmltools",
+  "scales",
+  "gmstools",
+  "geodata",
+  "tidygeocoder",
+  "rgeoboundaries",
+  "readr",
+  "lubridate",
+  "zip",
+  "echarts4r" 
+)
+
+install_if_missing <- function(pkgs) {
+  ip <- rownames(installed.packages())
+  missing_pkgs <- pkgs[!pkgs %in% ip]
+  if (length(missing_pkgs) > 0) {
+    message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
+    install.packages(missing_pkgs, dependencies = TRUE)
+  }
+}
+
+# If you ever want automatic updates as well, uncomment this and the call below.
+update_if_desired <- function(pkgs) {
+  op <- old.packages()
+  if (is.null(op)) return(invisible())
+  old_names <- rownames(op)
+  to_update <- pkgs[pkgs %in% old_names]
+  if (length(to_update) > 0) {
+    message("Updating packages: ", paste(to_update, collapse = ", "))
+    update.packages(ask = FALSE, oldPkgs = to_update)
+  }
+}
+
+# Install any missing packages
+install_if_missing(required_packages)
+
+# Optionally update them (commented out by default)
+# update_if_desired(required_packages)
+
+# Load them
+invisible(lapply(required_packages, library, character.only = TRUE))
+
+# Dark / neon palette
+pal_main  <- c("#00F5FF", "#00C9FF", "#4B9CD3", "#7B68EE",
+               "#00BFFF", "#1E90FF", "#39FF14")
+pal_panel <- "#050812"
+pal_text  <- "#E8F4FF"
+
+# CSS string for hard dark mode + full-height charts + global busy overlay
+dark_css <- paste0(
+  "<style>
+html, body {
+  background-color:", pal_panel, " !important;
+  color:", pal_text, " !important;
+}
+.main-container, .container-fluid, .content, .tab-content,
+.section, .row, .col-sm-12, .col-sm-6, .col-sm-4, .col-sm-8 {
+  background-color:", pal_panel, " !important;
+  color:", pal_text, " !important;
+}
+.navbar, .navbar-default, .navbar-fixed-top {
+  background-color:#02030a !important;
+  border-color:#02030a !important;
+}
+.navbar .navbar-brand, .navbar .navbar-nav>li>a {
+  color:", pal_text, " !important;
+}
+
+/* TOP NAV: hover + active glow */
+.navbar .navbar-nav>li>a {
+  position: relative;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+}
+.navbar .navbar-nav>li>a:hover,
+.navbar .navbar-nav>li>a:focus {
+  background-color: rgba(0, 245, 255, 0.16) !important;
+  box-shadow: 0 0 14px rgba(0, 245, 255, 0.8);
+  color:#ffffff !important;
+}
+.navbar .navbar-nav>li.active>a,
+.navbar .navbar-nav>li.active>a:focus,
+.navbar .navbar-nav>li.active>a:hover {
+  background-color:#0A2740 !important;
+  box-shadow: 0 0 18px rgba(0, 245, 255, 0.9);
+  color:#ffffff !important;
+}
+
+/* INNER TABSETS */
+.tabset .nav-tabs>li>a {
+  color:#9ECFFF !important;
+  background-color:#07192B !important;
+  border-color:#07192B !important;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+}
+.tabset .nav-tabs>li>a:hover,
+.tabset .nav-tabs>li>a:focus {
+  background-color: rgba(0, 245, 255, 0.14) !important;
+  box-shadow: 0 0 10px rgba(0, 245, 255, 0.7);
+  color:#ffffff !important;
+}
+.tabset .nav-tabs>li.active>a {
+  color:#ffffff !important;
+  background-color:#0A2740 !important;
+  border-color:#00C9FF !important;
+  box-shadow: 0 0 14px rgba(0, 245, 255, 0.9);
+}
+
+.chart-wrapper, .chart-stage, .well, .panel, .panel-body {
+  background-color:", pal_panel, " !important;
+  border-color:#0a1a2a !important;
+  color:", pal_text, " !important;
+}
+.chart-stage {
+  height:100% !important;
+}
+.sidebar {
+  background-color:#050812 !important;
+  border-color:#0a1a2a !important;
+  color:", pal_text, " !important;
+}
+.section.level1 h1, .section.level2 h2, .section.level3 h3 {
+  color:", pal_text, " !important;
+}
+.value-box {
+  background-color:#07192B !important;
+  border:1px solid #00C9FF !important;
+  color:", pal_text, " !important;
+}
+table.dataTable td, table.dataTable th {
+  color:", pal_text, " !important;
+  background-color:#050812 !important;
+}
+table.dataTable {
+  background-color:#050812 !important;
+}
+.dataTables_wrapper .dataTables_paginate .paginate_button {
+  color:", pal_text, " !important;
+}
+a, a:hover, a:focus {
+  color:#00F5FF !important;
+}
+.visNetwork {
+  background-color:", pal_panel, " !important;
+}
+
+/* Global busy overlay */
+.global-busy-indicator {
+  pointer-events: none;
+}
+.busy-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(2, 3, 10, 0.78);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  pointer-events: all;
+}
+.busy-spinner {
+  border: 6px solid #1f2937;
+  border-top: 6px solid #00F5FF;
+  border-radius: 50%;
+  width: 60px;
+  height: 60px;
+  animation: spin 0.9s linear infinite;
+  box-shadow: 0 0 25px rgba(0, 245, 255, 0.8);
+}
+.busy-text {
+  margin-top: 15px;
+  color:", pal_text, ";
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.busy-subtext {
+  margin-top: 6px;
+  color:#9ECFFF;
+  font-size: 11px;
+  opacity: 0.85;
+}
+@keyframes spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+</style>"
+)
+
+responsive_css <- paste0(
+  "<style>
+:root{
+  --vh: 1vh;
+  --vw: 1vw;
+  --navbar-h: 50px;
+}
+
+/* Make tiles behave like true full-height panels */
+html, body{
+  height: calc(var(--vh) * 100);
+}
+.main-container, .container-fluid, .content, .tab-content{
+  height: 100%;
+}
+.tab-pane{
+  height: 100%;
+}
+.tab-pane.active{
+  height: 100%;
+}
+
+/* Keep widgets filling their tiles */
+.chart-wrapper, .chart-stage{
+  height: 100% !important;
+}
+.chart-stage{
+  overflow: hidden; /* avoids ugly double scrollbars on large screens */
+}
+.chart-wrapper .html-widget,
+.chart-wrapper .shiny-html-output,
+.chart-wrapper .plotly,
+.chart-wrapper .js-plotly-plot{
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Sidebar: scroll inside it so buttons stay reachable */
+.sidebar{
+  max-height: calc(var(--vh) * 100 - var(--navbar-h) - 20px);
+  overflow-y: auto;
+}
+.sidebar .shiny-input-container,
+.sidebar .selectize-control,
+.sidebar .btn{
+  width: 100% !important;
+}
+
+/* Tables: don't blow up layouts */
+.dataTables_wrapper{
+  width: 100% !important;
+}
+
+/* Breakpoints */
+@media (max-width: 991px){
+  /* On smaller screens, allow page scroll if needed */
+  html, body{ overflow: auto; }
+  .content{ overflow: auto; }
+  .sidebar{ max-height: none; }
+  .chart-stage{ overflow: auto; } /* let small screens scroll within tiles */
+}
+
+@media (max-width: 767px){
+  body{ font-size: 12px !important; }
+  .navbar .navbar-nav>li>a{ padding: 10px 12px !important; }
+  .value-box{ margin-bottom: 10px; }
+  .dataTables_wrapper{ font-size: 11px !important; }
+}
+</style>"
+)
+
+# Replace ONLY the responsive_js block you added earlier with this version.
+# Key changes:
+# 1) Do NOT push window width/height into Shiny on every resize (it can invalidate reactives and feel like a full reload).
+# 2) Debounce all resize work so it runs after the user stops dragging the window.
+# 3) Do NOT call visNetwork.fit() on resize (it can reset selections and look like data vanished).
+
+responsive_js <- paste0(
+  "<script>\n",
+  "(function(){\n",
+  "  var resizeTimer = null;\n",
+  "  var lastW = null, lastH = null;\n",
+  "\n",
+  "  function setVhVw(){\n",
+  "    var w = window.innerWidth || document.documentElement.clientWidth;\n",
+  "    var h = window.innerHeight || document.documentElement.clientHeight;\n",
+  "    if(lastW === w && lastH === h) return;\n",
+  "    lastW = w; lastH = h;\n",
+  "    document.documentElement.style.setProperty('--vh', (h * 0.01) + 'px');\n",
+  "    document.documentElement.style.setProperty('--vw', (w * 0.01) + 'px');\n",
+  "  }\n",
+  "\n",
+  "  function resizePlotly(){\n",
+  "    if(!window.Plotly || !Plotly.Plots) return;\n",
+  "    var els = document.querySelectorAll('.js-plotly-plot');\n",
+  "    for(var i=0;i<els.length;i++){\n",
+  "      try{ Plotly.Plots.resize(els[i]); }catch(e){}\n",
+  "    }\n",
+  "  }\n",
+  "\n",
+  "  function resizeLeaflet(){\n",
+  "    if(!window.HTMLWidgets || !HTMLWidgets.find) return;\n",
+  "    var els = document.querySelectorAll('.leaflet.html-widget');\n",
+  "    for(var i=0;i<els.length;i++){\n",
+  "      try{\n",
+  "        var w = HTMLWidgets.find(els[i]);\n",
+  "        if(w && w.getMap){ w.getMap().invalidateSize(); }\n",
+  "        else if(w && w.instance && w.instance.map){ w.instance.map.invalidateSize(); }\n",
+  "      }catch(e){}\n",
+  "    }\n",
+  "  }\n",
+  "\n",
+  "  function resizeEcharts(){\n",
+  "    if(!window.echarts) return;\n",
+  "    var els = document.querySelectorAll('.echarts4r.html-widget, .echarts4r');\n",
+  "    for(var i=0;i<els.length;i++){\n",
+  "      try{\n",
+  "        var inst = echarts.getInstanceByDom(els[i]);\n",
+  "        if(inst) inst.resize();\n",
+  "      }catch(e){}\n",
+  "    }\n",
+  "  }\n",
+  "\n",
+  "  function resizeVisNetwork(){\n",
+  "    if(!window.HTMLWidgets || !HTMLWidgets.find) return;\n",
+  "    var els = document.querySelectorAll('.visNetwork.html-widget');\n",
+  "    for(var i=0;i<els.length;i++){\n",
+  "      try{\n",
+  "        var w = HTMLWidgets.find(els[i]);\n",
+  "        if(w && w.instance && w.instance.network){\n",
+  "          // redraw only; do NOT fit() on resize (it can clear selections / feel like reload)\n",
+  "          w.instance.network.redraw();\n",
+  "        }\n",
+  "      }catch(e){}\n",
+  "    }\n",
+  "  }\n",
+  "\n",
+  "  function resizeAll(){\n",
+  "    resizePlotly();\n",
+  "    resizeLeaflet();\n",
+  "    resizeEcharts();\n",
+  "    resizeVisNetwork();\n",
+  "  }\n",
+  "\n",
+  "  function scheduleResizeAll(){\n",
+  "    if(resizeTimer) clearTimeout(resizeTimer);\n",
+  "    resizeTimer = setTimeout(function(){\n",
+  "      resizeTimer = null;\n",
+  "      resizeAll();\n",
+  "    }, 250);\n",
+  "  }\n",
+  "\n",
+  "  function onResize(){\n",
+  "    setVhVw();\n",
+  "    scheduleResizeAll();\n",
+  "  }\n",
+  "\n",
+  "  setVhVw();\n",
+  "  window.addEventListener('resize', onResize);\n",
+  "  window.addEventListener('orientationchange', function(){\n",
+  "    setTimeout(onResize, 250);\n",
+  "  });\n",
+  "\n",
+  "  if(window.jQuery){\n",
+  "    $(document).on('shown.bs.tab shown.bs.collapse', function(){\n",
+  "      scheduleResizeAll();\n",
+  "    });\n",
+  "    // After a Shiny reconnect, reflow widgets once\n",
+  "    $(document).on('shiny:connected', function(){\n",
+  "      setTimeout(function(){ setVhVw(); resizeAll(); }, 300);\n",
+  "    });\n",
+  "  }\n",
+  "\n",
+  "  setTimeout(function(){ resizeAll(); }, 350);\n",
+  "})();\n",
+  "</script>"
+)
+
+htmltools::tags$head(
+  htmltools::tags$style(htmltools::HTML("
+    div.vis-tooltip{
+      background: #000 !important;
+      color: #00F5FF !important;
+      border: 1px solid #00C9FF !important;
+      border-radius: 8px !important;
+      padding: 10px 12px !important;
+      box-shadow: 0 0 18px rgba(0, 245, 255, 0.25) !important;
+      font-size: 13px !important;
+    }
+    div.vis-tooltip b{ color: #FFFFFF !important; }
+  "))
+)
+
+#-----------------------------------------------------------------
+
+# Helper: split comma-separated multi-value fields and count
+split_multivalue_counts <- function(df, col_name) {
+  if (!col_name %in% names(df)) return(tibble(value = character(), n = integer()))
+  df %>%
+    filter(!is.na(.data[[col_name]]),
+           .data[[col_name]] != "") %>%
+    mutate(value = str_split(as.character(.data[[col_name]]), ",")) %>%
+    unnest(value) %>%
+    mutate(value = str_trim(value),
+           value = na_if(value, "")) %>%
+    filter(!is.na(value)) %>%
+    count(value, name = "n") %>%
+    arrange(desc(n))
+}
+
+pct_label <- function(x, total) {
+  if (is.na(total) || total == 0) return("0%")
+  paste0(round(100 * x / total, 1), "%")
+}
+
+# World polygons and centroids (still used for flows map)
+world_sf <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf")
+world_centroids <- sf::st_centroid(world_sf)
+world_centroids_coords <- sf::st_coordinates(world_centroids)
+world_centers <- world_sf %>%
+  sf::st_drop_geometry() %>%
+  mutate(
+    lon  = world_centroids_coords[, 1],
+    lat  = world_centroids_coords[, 2],
+    name = admin
+  )
+
+# Sub-national (admin1 / “states”) centroids (kept for other uses if needed)
+states_sf <- rnaturalearth::ne_download(
+  scale       = 50,
+  type        = "states",
+  category    = "cultural",
+  returnclass = "sf"
+)
+
+states_sf <- sf::st_make_valid(states_sf)
+states_centroids <- sf::st_point_on_surface(states_sf)
+states_coords <- sf::st_coordinates(states_centroids)
+states_centers <- states_sf %>%
+  sf::st_drop_geometry() %>%
+  mutate(
+    lon = states_coords[, 1],
+    lat = states_coords[, 2]
+  )
+
+# ---------- Data helper functions & global caches ----------
+
+# cache for the cleaned dataset (one copy per upload)
+gms_data <- reactiveVal(NULL)
+
+# cache for geocoded points per filtered dataset
+geo_points_cache <- reactiveVal(NULL)
+
+# cache for FX conversion settings
+fx_settings <- reactiveVal(NULL)
+
+core_gms_clean <- function(dat) {
+
+  # Trim key text fields BEFORE cleaning
+  for (nm in c(
+    "platform_name", "item_seller_name", "group_name",
+    "origin_country", "destination_country",
+    "location_level0", "location_level1", "location_level2",
+    "item_sold_in", "item_CITES", "item_cites"
+  )) {
+    if (nm %in% names(dat)) {
+      dat[[nm]] <- trimws(as.character(dat[[nm]]))
+    }
+  }
+
+  # Main GMS cleaner (handles dates etc.)
+  dat <- gmstools::clean_gms_data(dat)
+
+  # Keep both CITES variants available
+  if ("item_cites" %in% names(dat) && !"item_CITES" %in% names(dat)) {
+    dat$item_CITES <- dat$item_cites
+  }
+
+  # Force location levels to exist and be clean character columns
+  for (nm in c("location_level0", "location_level1", "location_level2")) {
+    if (nm %in% names(dat)) {
+      dat[[nm]] <- as.character(dat[[nm]])
+      dat[[nm]] <- trimws(dat[[nm]])
+      dat[[nm]][dat[[nm]] == ""] <- NA_character_
+    } else {
+      dat[[nm]] <- NA_character_
+    }
+  }
+
+  # Numeric fields: item_price + item_count
+  if ("item_price" %in% names(dat)) {
+    suppressWarnings({
+      dat$item_price <- as.numeric(dat$item_price)
+    })
+  }
+
+  if ("item_count" %in% names(dat)) {
+    suppressWarnings({
+      dat$item_count <- as.numeric(dat$item_count)
+    })
+  }
+
+  dat
+}
+
+# simple accessor: just returns the cached, cleaned data
+load_data <- function() {
+  dat <- gms_data()
+  req(dat)   # error nicely if nothing uploaded yet
+  dat
+}
+
+# apply sidebar filters to a given dataset
+apply_filters <- function(dat, input) {
+  # Date filter
+  if ("record_date" %in% names(dat) &&
+      !is.null(input$filter_date) &&
+      !all(is.na(dat$record_date))) {
+    dat <- dat %>%
+      dplyr::filter(
+        is.na(record_date) |
+          (record_date >= input$filter_date[1] &
+             record_date <= input$filter_date[2])
+      )
+  }
+
+  # Platform filter
+  if (!is.null(input$filter_platform) &&
+      !"All" %in% input$filter_platform &&
+      "platform_name" %in% names(dat)) {
+    dat <- dat %>%
+      dplyr::filter(platform_name %in% input$filter_platform)
+  }
+
+  # Taxa filter
+  if (!is.null(input$filter_taxa) &&
+      !"All" %in% input$filter_taxa &&
+      "item_taxa" %in% names(dat)) {
+    dat <- dat %>%
+      dplyr::filter(item_taxa %in% input$filter_taxa)
+  }
+
+  # CITES filter (uses item_CITES which we ensured exists in core_gms_clean)
+  if (!is.null(input$filter_cites) &&
+      !"All" %in% input$filter_cites &&
+      "item_CITES" %in% names(dat)) {
+    dat <- dat %>%
+      dplyr::filter(item_CITES %in% input$filter_cites)
+  }
+
+  # Cases of interest only
+  if (!is.null(input$filter_coi) &&
+      isTRUE(input$filter_coi) &&
+      "is_case_of_interest" %in% names(dat)) {
+    dat <- dat %>%
+      dplyr::filter(
+        is_case_of_interest == TRUE |
+          is_case_of_interest %in% c(1, "1", "TRUE", "True", "yes", "Yes")
+      )
+  }
+
+  # NEW: remove [ENCRYPTED] sellers if flagged
+  if (!is.null(input$filter_remove_encrypted) &&
+      isTRUE(input$filter_remove_encrypted) &&
+      "item_seller_name" %in% names(dat)) {
+    dat <- dat %>%
+      dplyr::filter(item_seller_name != "[ENCRYPTED]")
+  }
+
+  # NEW: remove Anonymous participant sellers if flagged
+  if (!is.null(input$filter_remove_anon) &&
+      isTRUE(input$filter_remove_anon) &&
+      "item_seller_name" %in% names(dat)) {
+    dat <- dat %>%
+      dplyr::filter(item_seller_name != "Anonymous participant")
+  }
+
+  dat
+}
+
+# Main filtered dataset as a reactive
+filtered_data <- reactive({
+  dat <- load_data()
+  apply_filters(dat, input)
+})
+
+# Backwards-compatible helper: ignore input arg, return filtered_data()
+get_filtered_data <- function(input_unused = NULL) {
+  filtered_data()
+}
+
+get_cites_summary <- function(input_unused = NULL) {
+  # Use the global filtered dataset, which respects uploaded projects
+  dat <- tryCatch(get_filtered_data(), error = function(e) NULL)
+
+  # If nothing available, return zeros so the cards don't break
+  if (is.null(dat) || nrow(dat) == 0) {
+    return(list(I = 0L, II = 0L, I_II = 0L, total = 0L))
+  }
+
+  total_rec <- nrow(dat)
+
+  # Figure out which CITES column we actually have after cleaning
+  cites_col <- NULL
+  if ("item_cites" %in% names(dat)) {
+    cites_col <- "item_cites"      # gmstools::clean_gms_data version
+  } else if ("item_CITES" %in% names(dat)) {
+    cites_col <- "item_CITES"      # raw export version
+  }
+
+  # If no column, still report total but zero CITES
+  if (is.null(cites_col)) {
+    return(list(I = 0L, II = 0L, I_II = 0L, total = total_rec))
+  }
+
+  # Standardise values
+  cites_vec <- toupper(trimws(as.character(dat[[cites_col]])))
+
+  # Treat obvious non CITES as NA
+  cites_vec[cites_vec %in% c(
+    "", "NA", "NAN",
+    "NON CITES", "NON-CITES", "NOT CITES", "NON CITES SPECIES",
+    "NON CITES SPECIE", "NON CITES SPECIES ", "NOT LISTED"
+  )] <- NA
+
+  # Pure I
+  is_i <- !is.na(cites_vec) & cites_vec %in% c(
+    "I", "CITES I", "APPENDIX I", "CITES APPENDIX I"
+  )
+
+  # Pure II
+  is_ii <- !is.na(cites_vec) & cites_vec %in% c(
+    "II", "CITES II", "APPENDIX II", "CITES APPENDIX II"
+  )
+
+  # Explicit mixed I/II category
+  is_i_ii <- !is.na(cites_vec) & cites_vec %in% c(
+    "I/II", "CITES I/II", "APPENDIX I/II"
+  )
+
+  n_i        <- sum(is_i,    na.rm = TRUE)
+  n_ii       <- sum(is_ii,   na.rm = TRUE)
+  n_i_ii_mix <- sum(is_i_ii, na.rm = TRUE)
+
+  list(
+    I    = n_i,
+    II   = n_ii,
+    I_II = n_i_ii_mix,
+    total = total_rec
+  )
+}
+
+# =====================================================
+# geoBoundaries-based geocoding (adm0/adm1/adm2)
+# =====================================================
+
+# cache for geoBoundaries shapes per (adm level + country set)
+geoboundaries_cache <- new.env(parent = emptyenv())
+
+# Geocode unique admin combos and return centroids with stats
+# Uses geoBoundaries (adm0/adm1/adm2) and shapeName for names
+geocode_admin_points <- function(dat, lvl = "l2") {
+
+  empty_pts <- tibble::tibble(
+    lon = numeric(0),
+    lat = numeric(0),
+    location_level0 = character(0),
+    location_level1 = character(0),
+    location_level2 = character(0),
+    records = numeric(0),
+    items   = numeric(0),
+    price   = numeric(0)
+  )
+
+  has_l0 <- "location_level0" %in% names(dat)
+  has_l1 <- "location_level1" %in% names(dat)
+  has_l2 <- "location_level2" %in% names(dat)
+
+  # map lvl to geoBoundaries adm level
+  adm_lvl <- switch(
+    lvl,
+    "l0" = "adm0",
+    "l1" = "adm1",
+    "l2" = "adm2",
+    "adm0"
+  )
+
+  # ----------------- Level 2: country + admin1 + admin2 -----------------
+  if (lvl == "l2") {
+
+    if (!(has_l0 && has_l1 && has_l2)) return(empty_pts)
+
+    agg <- dat %>%
+      dplyr::filter(
+        !is.na(location_level0), trimws(location_level0) != "",
+        !is.na(location_level1), trimws(location_level1) != "",
+        !is.na(location_level2), trimws(location_level2) != ""
+      ) %>%
+      dplyr::group_by(location_level0, location_level1, location_level2) %>%
+      dplyr::summarise(
+        records = dplyr::n(),
+        items   = if ("item_count" %in% names(dat))
+          sum(item_count, na.rm = TRUE) else NA_real_,
+        price   = if ("item_price" %in% names(dat))
+          sum(item_price, na.rm = TRUE) else NA_real_,
+        .groups = "drop"
+      )
+
+    if (nrow(agg) == 0) return(empty_pts)
+
+    agg2 <- agg %>%
+      mutate(
+        key2 = toupper(trimws(as.character(location_level2)))
+      )
+
+    countries <- sort(unique(agg2$location_level0))
+    if (length(countries) == 0) return(empty_pts)
+
+    cache_key <- paste(adm_lvl, paste(countries, collapse = "|"), sep = "__")
+    gb <- geoboundaries_cache[[cache_key]]
+    if (is.null(gb)) {
+      gb <- tryCatch(
+        rgeoboundaries::geoboundaries(countries, adm_lvl),
+        error = function(e) NULL
+      )
+      geoboundaries_cache[[cache_key]] <- gb
+    }
+
+    if (is.null(gb) || nrow(gb) == 0) return(empty_pts)
+
+    gb_cent  <- sf::st_point_on_surface(gb)
+    gb_coord <- sf::st_coordinates(gb_cent)
+
+    gb_df <- gb %>%
+      sf::st_drop_geometry() %>%
+      mutate(
+        key2 = toupper(trimws(as.character(shapeName))),
+        lon  = gb_coord[, 1],
+        lat  = gb_coord[, 2]
+      ) %>%
+      dplyr::select(key2, lon, lat)
+
+    pts <- agg2 %>%
+      dplyr::left_join(gb_df, by = "key2") %>%
+      dplyr::transmute(
+        lon, lat,
+        location_level0,
+        location_level1,
+        location_level2,
+        records, items, price
+      )
+
+  # ----------------- Level 1: country + admin1 only -----------------
+  } else if (lvl == "l1") {
+
+    if (!(has_l0 && has_l1)) return(empty_pts)
+
+    agg <- dat %>%
+      dplyr::filter(
+        !is.na(location_level0), trimws(location_level0) != "",
+        !is.na(location_level1), trimws(location_level1) != ""
+      ) %>%
+      dplyr::group_by(location_level0, location_level1) %>%
+      dplyr::summarise(
+        records = dplyr::n(),
+        items   = if ("item_count" %in% names(dat))
+          sum(item_count, na.rm = TRUE) else NA_real_,
+        price   = if ("item_price" %in% names(dat))
+          sum(item_price, na.rm = TRUE) else NA_real_,
+        .groups = "drop"
+      )
+
+    if (nrow(agg) == 0) return(empty_pts)
+
+    agg2 <- agg %>%
+      mutate(
+        key1 = toupper(trimws(as.character(location_level1)))
+      )
+
+    countries <- sort(unique(agg2$location_level0))
+    if (length(countries) == 0) return(empty_pts)
+
+    cache_key <- paste(adm_lvl, paste(countries, collapse = "|"), sep = "__")
+    gb <- geoboundaries_cache[[cache_key]]
+    if (is.null(gb)) {
+      gb <- tryCatch(
+        rgeoboundaries::geoboundaries(countries, adm_lvl),
+        error = function(e) NULL
+      )
+      geoboundaries_cache[[cache_key]] <- gb
+    }
+
+    if (!is.null(gb) && nrow(gb) > 0) {
+      gb_cent  <- sf::st_point_on_surface(gb)
+      gb_coord <- sf::st_coordinates(gb_cent)
+
+      gb_df <- gb %>%
+        sf::st_drop_geometry() %>%
+        mutate(
+          key1 = toupper(trimws(as.character(shapeName))),
+          lon  = gb_coord[, 1],
+          lat  = gb_coord[, 2]
+        ) %>%
+        dplyr::select(key1, lon, lat)
+
+      pts <- agg2 %>%
+        dplyr::left_join(gb_df, by = "key1") %>%
+        dplyr::transmute(
+          lon, lat,
+          location_level0,
+          location_level1,
+          location_level2 = NA_character_,
+          records, items, price
+        )
+    } else {
+      pts <- agg2 %>%
+        mutate(
+          lon = NA_real_,
+          lat = NA_real_,
+          location_level2 = NA_character_
+        ) %>%
+        dplyr::select(
+          lon, lat,
+          location_level0, location_level1, location_level2,
+          records, items, price
+        )
+    }
+
+    # Fallback: tidygeocoder for any L1 combos that still have missing coords
+    miss <- pts %>%
+      dplyr::filter(is.na(lon) | is.na(lat)) %>%
+      dplyr::distinct(location_level0, location_level1)
+
+    if (nrow(miss) > 0) {
+      miss_addr <- miss %>%
+        mutate(address = paste(location_level1, location_level0, sep = ", "))
+
+      geo_res <- tryCatch(
+        suppressMessages(
+          tidygeocoder::geocode(
+            miss_addr,
+            address = address,
+            method  = "osm",
+            lat     = lat,
+            long    = lon
+          )
+        ),
+        error = function(e) {
+          miss_addr %>% mutate(lat = NA_real_, lon = NA_real_)
+        }
+      )
+
+      fill_tbl <- geo_res %>%
+        dplyr::select(location_level0, location_level1, lon, lat)
+
+      pts <- pts %>%
+        dplyr::left_join(
+          fill_tbl,
+          by = c("location_level0", "location_level1"),
+          suffix = c("", "_geo")
+        ) %>%
+        mutate(
+          lon = ifelse(is.na(lon) & !is.na(lon_geo), lon_geo, lon),
+          lat = ifelse(is.na(lat) & !is.na(lat_geo), lat_geo, lat)
+        ) %>%
+        dplyr::select(-lon_geo, -lat_geo)
+    }
+
+  # ----------------- Level 0: country only -----------------
+  } else {  # "l0"
+
+    if (!has_l0) return(empty_pts)
+
+    agg <- dat %>%
+      dplyr::filter(!is.na(location_level0),
+                    trimws(location_level0) != "") %>%
+      dplyr::group_by(location_level0) %>%
+      dplyr::summarise(
+        records = dplyr::n(),
+        items   = if ("item_count" %in% names(dat))
+          sum(item_count, na.rm = TRUE) else NA_real_,
+        price   = if ("item_price" %in% names(dat))
+          sum(item_price, na.rm = TRUE) else NA_real_,
+        .groups = "drop"
+      )
+
+    if (nrow(agg) == 0) return(empty_pts)
+
+    agg2 <- agg %>%
+      mutate(
+        key0 = toupper(trimws(as.character(location_level0)))
+      )
+
+    countries <- sort(unique(agg2$location_level0))
+    if (length(countries) == 0) return(empty_pts)
+
+    cache_key <- paste(adm_lvl, paste(countries, collapse = "|"), sep = "__")
+    gb <- geoboundaries_cache[[cache_key]]
+    if (is.null(gb)) {
+      gb <- tryCatch(
+        rgeoboundaries::geoboundaries(countries, adm_lvl),
+        error = function(e) NULL
+      )
+      geoboundaries_cache[[cache_key]] <- gb
+    }
+
+    if (!is.null(gb) && nrow(gb) > 0) {
+      gb_cent  <- sf::st_point_on_surface(gb)
+      gb_coord <- sf::st_coordinates(gb_cent)
+
+      gb_df <- gb %>%
+        sf::st_drop_geometry() %>%
+        mutate(
+          key0 = toupper(trimws(as.character(shapeName))),
+          lon  = gb_coord[, 1],
+          lat  = gb_coord[, 2]
+        ) %>%
+        dplyr::select(key0, lon, lat)
+
+      pts <- agg2 %>%
+        dplyr::left_join(gb_df, by = "key0") %>%
+        dplyr::transmute(
+          lon, lat,
+          location_level0,
+          location_level1 = NA_character_,
+          location_level2 = NA_character_,
+          records, items, price
+        )
+    } else {
+      # Fallback: use rnaturalearth centroids
+      pts <- agg2 %>%
+        dplyr::left_join(
+          world_centers %>%
+            dplyr::transmute(
+              location_level0 = name,
+              lon, lat
+            ),
+          by = "location_level0"
+        ) %>%
+        dplyr::transmute(
+          lon, lat,
+          location_level0,
+          location_level1 = NA_character_,
+          location_level2 = NA_character_,
+          records, items, price
+        )
+    }
+  }
+
+  pts %>%
+    dplyr::mutate(
+      location_level0 = as.character(location_level0),
+      location_level1 = as.character(location_level1),
+      location_level2 = as.character(location_level2)
+    )
+}
+
+# One-time geocoding per dataset / project
+observeEvent(get_filtered_data(), {
+  # Safely get whatever the app is currently using as its main dataset
+  dat <- tryCatch(get_filtered_data(), error = function(e) NULL)
+
+  if (is.null(dat) || nrow(dat) == 0) {
+    geo_points_cache(NULL)
+    return()
+  }
+
+  # If a project .rds is loaded and it already contains geocoded points,
+  # reuse those instead of geocoding again.
+  proj <- uploaded_project()
+  if (!is.null(proj) && !is.null(proj$geo_points)) {
+    geo_points_cache(proj$geo_points)
+    return()
+  }
+
+  shiny::withProgress(
+    message = "Processing data for current filters...",
+    value   = 0,
+    {
+      incProgress(0.2)
+      pts_l0 <- geocode_admin_points(dat, lvl = "l0")
+      incProgress(0.6)
+      pts_l1 <- geocode_admin_points(dat, lvl = "l1")
+      incProgress(0.9)
+      pts_l2 <- geocode_admin_points(dat, lvl = "l2")
+
+      geo_points_cache(
+        list(
+          l0 = pts_l0,
+          l1 = pts_l1,
+          l2 = pts_l2
+        )
+      )
+      incProgress(1)
+    }
+  )
+})
+```
+
+```{r darkCss, echo=FALSE, results='asis'}
+# Inject CSS into the document
+cat(paste0(dark_css, responsive_css, responsive_js))
+```
+
+```{r busy_indicator, echo=FALSE}
+# Global animated busy overlay whenever Shiny is working
+div(
+  class = "global-busy-indicator",
+  conditionalPanel(
+    condition = "$('html').hasClass('shiny-busy')",
+    div(
+      class = "busy-overlay",
+      div(class = "busy-spinner"),
+      div(class = "busy-text", "Loading..."),
+      div(class = "busy-subtext", "Processing data and updating the dashboard")
+    )
+  )
+)
+```
+
+```{r filter_observers}
+# ===============================
+# Observers to initialise / reset filters
+# ===============================
+
+# When a file is uploaded, initialise filters from data
+observeEvent(input$file_data, {
+  session <- shiny::getDefaultReactiveDomain()
+  if (is.null(session)) return(NULL)
+
+  shiny::withProgress(message = "Loading and cleaning data...", value = 0, {
+    setProgress(0.1)
+
+    # Force everything to character to avoid vroom parse warnings
+    raw <- readr::read_csv(
+      input$file_data$datapath,
+      col_types      = readr::cols(.default = readr::col_character()),
+      progress       = FALSE,
+      show_col_types = FALSE
+    )
+
+    setProgress(0.7)
+    dat_clean <- core_gms_clean(raw)
+
+    setProgress(1)
+    gms_data(dat_clean)
+  })
+
+  dat <- load_data()
+
+  # Date range
+  if ("record_date" %in% names(dat) && any(!is.na(dat$record_date))) {
+    updateDateRangeInput(
+      session, "filter_date",
+      start = min(dat$record_date, na.rm = TRUE),
+      end   = max(dat$record_date, na.rm = TRUE)
+    )
+
+    years <- sort(unique(lubridate::year(dat$record_date[!is.na(dat$record_date)])))
+    if (length(years) > 0) {
+      updateSelectInput(
+        session, "calendar_year",
+        choices  = years,
+        selected = max(years, na.rm = TRUE)
+      )
+    }
+  }
+
+  # Platforms
+  if ("platform_name" %in% names(dat)) {
+    plats <- sort(unique(dat$platform_name))
+    updateSelectInput(
+      session, "filter_platform",
+      choices  = c("All", plats),
+      selected = "All"
+    )
+  }
+
+  # Taxa
+  if ("item_taxa" %in% names(dat)) {
+    taxa <- sort(unique(dat$item_taxa))
+    updateSelectInput(
+      session, "filter_taxa",
+      choices = c("All", taxa),
+      selected = "All"
+    )
+  }
+
+  # CITES
+  if ("item_CITES" %in% names(dat)) {
+    cites_levels <- sort(unique(dat$item_CITES))
+    updateSelectInput(
+      session, "filter_cites",
+      choices = c("All", cites_levels),
+      selected = "All"
+    )
+  }
+
+  # Initialise checkboxes
+  updateCheckboxInput(session, "filter_coi", value = FALSE)
+  updateCheckboxInput(session, "filter_remove_encrypted", value = FALSE)
+  updateCheckboxInput(session, "filter_remove_anon", value = FALSE)
+})
+
+# Reset button: restore filters to full-data defaults
+observeEvent(input$reset_filters, {
+  session <- shiny::getDefaultReactiveDomain()
+  if (is.null(session)) return(NULL)
+  req(input$file_data)
+
+  dat <- load_data()
+
+  # Date
+  if ("record_date" %in% names(dat) && any(!is.na(dat$record_date))) {
+    updateDateRangeInput(
+      session, "filter_date",
+      start = min(dat$record_date, na.rm = TRUE),
+      end   = max(dat$record_date, na.rm = TRUE)
+    )
+
+    years <- sort(unique(lubridate::year(dat$record_date[!is.na(dat$record_date)])))
+    if (length(years) > 0) {
+      updateSelectInput(
+        session, "calendar_year",
+        choices  = years,
+        selected = max(years, na.rm = TRUE)
+      )
+    }
+  }
+
+  # Platforms
+  if ("platform_name" %in% names(dat)) {
+    plats <- sort(unique(dat$platform_name))
+    updateSelectInput(
+      session, "filter_platform",
+      choices = c("All", plats),
+      selected = "All"
+    )
+  }
+
+  # Taxa
+  if ("item_taxa" %in% names(dat)) {
+    taxa <- sort(unique(dat$item_taxa))
+    updateSelectInput(
+      session, "filter_taxa",
+      choices = c("All", taxa),
+      selected = "All"
+    )
+  }
+
+  # CITES
+  if ("item_CITES" %in% names(dat)) {
+    cites_levels <- sort(unique(dat$item_CITES))
+    updateSelectInput(
+      session, "filter_cites",
+      choices = c("All", cites_levels),
+      selected = "All"
+    )
+  }
+
+  # Reset COI & seller filters
+  updateCheckboxInput(session, "filter_coi", value = FALSE)
+  updateCheckboxInput(session, "filter_remove_encrypted", value = FALSE)
+  updateCheckboxInput(session, "filter_remove_anon", value = FALSE)
+
+  # Reset FX conversion
+  fx_settings(NULL)
+  updateNumericInput(session, "fx_rate", value = 1)
+  updateTextInput(session, "fx_currency_label", value = "")
+})
+```
+
+```{r fx_observer}
+# Observer for FX conversion settings
+observeEvent(input$apply_conversion, {
+  rate  <- suppressWarnings(as.numeric(input$fx_rate))
+  label <- input$fx_currency_label
+
+  if (!is.na(rate) && rate > 0 && !is.null(label) && nzchar(label)) {
+    fx_settings(list(rate = rate, label = label))
+  } else {
+    fx_settings(NULL)
+  }
+})
+```
+
+Sidebar {.sidebar}
+=====================================
+
+```{r}
+fileInput("file_data", "Upload IWT CSV export",
+          accept = c(".csv"))
+
+dateRangeInput("filter_date", "Record date range",
+               start = Sys.Date() - 90,
+               end   = Sys.Date())
+
+selectInput("calendar_year", "Calendar year",
+            choices = c(""),
+            selected = NULL)
+
+selectInput("filter_platform", "Platform(s)",
+            choices = "All", selected = "All",
+            multiple = TRUE)
+
+selectInput("filter_taxa", "Taxa / group",
+            choices = "All", selected = "All",
+            multiple = TRUE)
+
+selectInput("filter_cites", "CITES category",
+            choices = "All", selected = "All",
+            multiple = TRUE)
+
+checkboxInput("filter_coi", "Cases of interest only", value = FALSE)
+
+# Removed: filter_remove_encrypted checkbox
+
+checkboxInput("filter_remove_anon",
+              "Remove Anonymous participants",
+              value = FALSE)
+
+actionButton("reset_filters", "Reset filters")
+
+# Version / watermark text under the reset button
+div(
+  style = "margin-top: 12px; font-size: 10px; line-height: 1.2; color: #8fa3c8;",
+  HTML(
+    "Version 1.1 (BETA)<br/>",
+    "Developed by Russell Gray - Head of Data<br/>",
+    "ECOSOLVE | Global Initiative Against Transnational Organized Crime (GI-TOC)"
+  )
+)
+```
+
+Data Overview {data-icon="fa-chart-bar"}
+=====================================
+
+Row {data-height=5}
+-------------------------------------
+
+### Total records
+
+```{r}
+renderValueBox({
+  # Safely try to get the filtered data; if nothing loaded yet, use 0
+  dat <- tryCatch(get_filtered_data(), error = function(e) NULL)
+  n_rec <- if (is.null(dat)) 0L else nrow(dat)
+
+  valueBox(
+    value   = format(n_rec, big.mark = ","),
+    caption = "Total records",
+    icon    = "fa-database"
+  )
+})
+
+```
+
+### Unique sellers
+
+```{r}
+renderValueBox({
+  dat <- tryCatch(get_filtered_data(), error = function(e) NULL)
+
+  n_sellers <- if (is.null(dat) || !"item_seller_name" %in% names(dat)) {
+    0L
+  } else {
+    dplyr::n_distinct(
+      dat$item_seller_name[
+        !is.na(dat$item_seller_name) & dat$item_seller_name != ""
+      ]
+    )
+  }
+
+  valueBox(
+    value   = format(n_sellers, big.mark = ","),
+    caption = "Unique sellers",
+    icon    = "fa-user"
+  )
+})
+
+```
+
+### CITES I
+
+```{r}
+renderValueBox({
+  cs <- get_cites_summary(input)
+  valueBox(
+    value   = sprintf("%s (%s)", format(cs$I, big.mark = ","), pct_label(cs$I, cs$total)),
+    caption = "CITES I records",
+    icon    = "fa-exclamation-circle"
+  )
+})
+```
+
+### CITES II
+
+```{r}
+renderValueBox({
+  cs <- get_cites_summary(input)
+  valueBox(
+    value   = sprintf("%s (%s)", format(cs$II, big.mark = ","), pct_label(cs$II, cs$total)),
+    caption = "CITES II records",
+    icon    = "fa-exclamation-triangle"
+  )
+})
+```
+
+### CITES I + II
+
+```{r}
+renderValueBox({
+  cs <- get_cites_summary(input)
+  valueBox(
+    value   = sprintf("%s (%s)", format(cs$I_II, big.mark = ","), pct_label(cs$I_II, cs$total)),
+    caption = "CITES I/II",
+    icon    = "fa-flag"
+  )
+})
+```
+
+Row {data-height=95}
+-------------------------------------
+
+Column {data-width=50}
+-------------------------
+
+### Species detected (top 20)
+
+```{r}
+renderPlotly({
+  dat <- get_filtered_data()
+
+  validate(need("item_common_name" %in% names(dat),
+                "item_common_name field not found."))
+
+  top_sp <- dat %>%
+    filter(!is.na(item_common_name), item_common_name != "") %>%
+    count(item_common_name, sort = TRUE) %>%
+    slice_head(n = 20)
+
+  validate(need(nrow(top_sp) > 0, "No species records for current filters."))
+
+  p_sp <- ggplot(top_sp,
+                 aes(x = reorder(item_common_name, n),
+                     y = n,
+                     fill = item_common_name)) +
+    geom_col(show.legend = FALSE) +
+    coord_flip() +
+    labs(x = NULL, y = "Records",
+         title = "Top species by record count") +
+    scale_fill_manual(values = rep(pal_main, length.out = nrow(top_sp))) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.background  = element_rect(fill = pal_panel, color = pal_panel),
+      panel.background = element_rect(fill = pal_panel, color = pal_panel),
+      text             = element_text(color = pal_text),
+      axis.text        = element_text(color = pal_text),
+      axis.title       = element_text(color = pal_text),
+      plot.title       = element_text(color = pal_text, face = "bold")
+    )
+
+  ggplotly(p_sp) %>%
+    layout(paper_bgcolor = pal_panel,
+           plot_bgcolor  = pal_panel,
+           font = list(color = pal_text))
+})
+```
+
+### Payment methods
+
+```{r}
+renderPlotly({
+  dat <- get_filtered_data()
+  
+  validate(need(
+    "payment_method" %in% names(dat),
+    "payment_method field not found."
+  ))
+  
+  pm_counts <- split_multivalue_counts(dat, "payment_method")
+  
+  validate(need(
+    nrow(pm_counts) > 0,
+    "No payment method data for current filters."
+  ))
+  
+  total_n <- sum(pm_counts$n, na.rm = TRUE)
+  top3_vals <- pm_counts %>%
+    slice_max(n, n = 3, with_ties = FALSE) %>%
+    pull(value)
+  
+  pm_counts <- pm_counts %>%
+    mutate(label_display = if_else(value %in% top3_vals, paste0(
+      value, " (", round(100 * n / total_n, 1), "%)"
+    ), ""))
+  
+  plot_ly(
+    pm_counts,
+    labels = ~ value,
+    values = ~ n,
+    type = "pie",
+    hole = 0.5,
+    text = ~ label_display,
+    textinfo = "text",
+    hoverinfo = "label+value+percent",
+    marker = list(colors = pal_main)
+  ) %>%
+    layout(
+      title = "Payment methods mentioned",
+      paper_bgcolor = pal_panel,
+      plot_bgcolor = pal_panel,
+      font = list(color = pal_text),
+      showlegend = FALSE
+    )
+})
+```
+
+Column {data-width=50}
+-------------------------
+
+### Platforms
+
+```{r}
+renderPlotly({
+  dat <- get_filtered_data()
+  
+  validate(need(
+    "platform_name" %in% names(dat),
+    "platform_name field not found."
+  ))
+  
+  plat_counts <- dat %>%
+    filter(!is.na(platform_name), platform_name != "") %>%
+    count(platform_name, sort = TRUE) %>%
+    slice_head(n = 20)
+  
+  validate(need(nrow(plat_counts) > 0, "No platform data for current filters."))
+  
+  p_plat <- ggplot(plat_counts, aes(
+    x = reorder(platform_name, n),
+    y = n,
+    fill = platform_name
+  )) +
+    geom_col(show.legend = FALSE) +
+    coord_flip() +
+    labs(x = NULL, y = "Records", title = "Top platforms by record count") +
+    scale_fill_manual(values = rep(pal_main, length.out = nrow(plat_counts))) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.background = element_rect(fill = pal_panel, color = pal_panel),
+      panel.background = element_rect(fill = pal_panel, color = pal_panel),
+      text = element_text(color = pal_text),
+      axis.text = element_text(color = pal_text),
+      axis.title = element_text(color = pal_text),
+      plot.title = element_text(color = pal_text, face = "bold")
+    )
+  
+  ggplotly(p_plat) %>%
+    layout(
+      paper_bgcolor = pal_panel,
+      plot_bgcolor = pal_panel,
+      font = list(color = pal_text)
+    )
+})
+```
+
+### Delivery methods
+
+```{r}
+renderPlotly({
+  dat <- get_filtered_data()
+  
+  validate(need(
+    "delivery_method" %in% names(dat),
+    "delivery_method field not found."
+  ))
+  
+  dat$delivery_method <- as.character(dat$delivery_method)
+  deliv_counts <- split_multivalue_counts(dat, "delivery_method")
+  
+  validate(need(
+    nrow(deliv_counts) > 0,
+    "No delivery method data for current filters."
+  ))
+  
+  total_n <- sum(deliv_counts$n, na.rm = TRUE)
+  top3_vals <- deliv_counts %>%
+    slice_max(n, n = 3, with_ties = FALSE) %>%
+    pull(value)
+  
+  deliv_counts <- deliv_counts %>%
+    mutate(label_display = if_else(value %in% top3_vals, paste0(
+      value, " (", round(100 * n / total_n, 1), "%)"
+    ), ""))
+  
+  plot_ly(
+    deliv_counts,
+    labels = ~ value,
+    values = ~ n,
+    type = "pie",
+    hole = 0.5,
+    text = ~ label_display,
+    textinfo = "text",
+    hoverinfo = "label+value+percent",
+    marker = list(colors = pal_main)
+  ) %>%
+    layout(
+      title = "Delivery methods mentioned",
+      paper_bgcolor = pal_panel,
+      plot_bgcolor = pal_panel,
+      font = list(color = pal_text),
+      showlegend = FALSE
+    )
+})
+```
+
+Temporal patterns {data-icon="fa-calendar"}
+=====================================
+
+Row {data-height=650}
+-------------------------------------
+
+### Daily record calendar
+
+```{r}
+renderEcharts4r({
+  dat <- get_filtered_data()
+
+  validate(need("item_date_posted" %in% names(dat),
+                "item_date_posted field not found."))
+
+  yr <- input$calendar_year
+
+  validate(need(!is.null(yr) && !is.na(yr) && nzchar(as.character(yr)),
+                "Select a calendar year in the sidebar."))
+
+  yr <- as.integer(yr)
+
+  # Aggregate counts by date for the selected year
+  daily <- dat %>%
+    filter(!is.na(item_date_posted),
+           lubridate::year(item_date_posted) == yr) %>%
+    count(item_date_posted, name = "n")
+
+  validate(need(nrow(daily) > 0,
+                "No records for the selected year under current filters."))
+
+  # Build a full sequence of days in that year so missing days show as 0
+  all_days <- tibble(
+    date = seq(
+      from = as.Date(paste0(yr, "-01-01")),
+      to   = as.Date(paste0(yr, "-12-31")),
+      by   = "day"
+    )
+  ) %>%
+    left_join(
+      daily %>% rename(date = item_date_posted),
+      by = "date"
+    ) %>%
+    mutate(
+      n = replace_na(n, 0L)
+    )
+
+  max_n <- max(all_days$n, na.rm = TRUE)
+
+  all_days %>%
+    e_charts(date) %>%
+    e_calendar(range = as.character(yr)) %>%
+    e_heatmap(n, coord_system = "calendar") %>%
+    e_visual_map(
+      min = 0,
+      max = max_n,
+      calculable = TRUE,
+      inRange = list(color = c("#020610", "#00324f", "#00BFFF", "#00F5FF"))
+    ) %>%
+    e_tooltip(
+      trigger = "item",
+      formatter = htmlwidgets::JS(
+        "function(params){
+           return params.value[0] + '<br/>Records: ' + params.value[1];
+         }"
+      )
+    ) %>%
+    e_title("Daily record counts", subtext = paste("Year", yr)) %>%
+    e_theme("dark")
+})
+```
+
+Row {data-height=650}
+-------------------------------------
+
+### Monthly taxa seasonality (top 10 taxa)
+
+```{r}
+renderEcharts4r({
+  dat <- get_filtered_data()
+
+  validate(need(all(c("item_date_posted", "item_common_name_website") %in% names(dat)),
+                "item_date_posted and/or item_common_name_website fields not found."))
+
+  yr <- input$calendar_year
+  validate(need(!is.null(yr) && !is.na(yr) && nzchar(as.character(yr)),
+                "Select a calendar year in the sidebar."))
+  yr <- as.integer(yr)
+
+  # Aggregate by month and taxa
+  monthly_taxa <- dat %>%
+    filter(!is.na(item_date_posted),
+           !is.na(item_common_name_website),
+           item_common_name_website != "",
+           lubridate::year(item_date_posted) == yr) %>%
+    mutate(month = lubridate::month(item_date_posted, label = TRUE, abbr = TRUE)) %>%
+    count(item_common_name_website, month, name = "n")
+
+  validate(need(nrow(monthly_taxa) > 0,
+                "No taxa records for the selected year under current filters."))
+
+  # Keep top 10 taxa by total yearly records
+  top_taxa <- monthly_taxa %>%
+    group_by(item_common_name_website) %>%
+    summarise(total = sum(n), .groups = "drop") %>%
+    arrange(desc(total)) %>%
+    slice_head(n = 10) %>%
+    pull(item_common_name_website)
+
+  monthly_taxa <- monthly_taxa %>%
+    filter(item_common_name_website %in% top_taxa)
+
+  # Complete missing month/taxa combos so zeros show
+  monthly_taxa <- monthly_taxa %>%
+    mutate(
+      month = factor(as.character(month),
+                     levels = month.abb)
+    ) %>%
+    complete(item_common_name_website, month, fill = list(n = 0L))
+
+  max_n <- max(monthly_taxa$n, na.rm = TRUE)
+
+  monthly_taxa %>%
+    arrange(month) %>%
+    e_charts(month) %>%
+    e_heatmap(item_common_name_website, n) %>%
+    e_visual_map(
+      min = 0,
+      max = max_n,
+      calculable = TRUE,
+      orient = "vertical",
+      right = 10,
+      top = "middle",
+      inRange = list(color = c("#020610", "#00324f", "#00BFFF", "#00F5FF"))
+    ) %>%
+    e_tooltip(
+      trigger = "item",
+      formatter = htmlwidgets::JS(
+        "function(params){
+           return 'Taxa: ' + params.value[1] +
+                  '<br/>Month: ' + params.value[0] +
+                  '<br/>Records: ' + params.value[2];
+         }"
+      )
+    ) %>%
+    e_axis_labels(x = "Month", y = "Taxa (top 10)") %>%
+    e_title("Seasonality by month and taxa",
+            subtext = paste("Top 10 taxa by records in", yr)) %>%
+    e_theme("dark")
+})
+```
+
+Maps & Flows {data-icon="fa-globe"}
+=====================================
+
+Row {data-height=200}
+-------------------------------------
+
+### Map controls
+
+```{r}
+div(
+  style = "display:flex; align-items:center; gap:20px;",
+
+  radioButtons(
+    "map_metric", "Map metric",
+    choices = c(
+      "Number of records"    = "records",
+      "Total item count"     = "items",
+      "Total recorded price" = "price"
+    ),
+    inline = TRUE
+  ),
+
+  div(
+    style = "min-width:250px; max-width:350px;",
+    sliderInput(
+      "flow_top_n", "Top OD routes to show",
+      min = 5, max = 50, value = 20, step = 5
+    )
+  )
+)
+
+```
+
+Row {data-height=850}
+-------------------------------------
+
+### Hotspot map
+
+```{r}
+renderLeaflet({
+
+  dat <- get_filtered_data()
+
+  # No data after filters
+  if (nrow(dat) == 0) {
+    return(
+      leaflet() %>%
+        addProviderTiles("CartoDB.DarkMatter") %>%
+        addControl("No data for current filters.",
+                   position = "topright")
+    )
+  }
+
+  # Use cached geocoded points; do NOT geocode here
+  geo <- geo_points_cache()
+
+  # Geocoding still running or not yet done
+  if (is.null(geo)) {
+    return(
+      leaflet() %>%
+        addProviderTiles("CartoDB.DarkMatter") %>%
+        addControl("Geocoding locations… please wait.",
+                   position = "topright")
+    )
+  }
+
+  pts_l0 <- geo$l0 %>% dplyr::filter(!is.na(lon), !is.na(lat))
+  pts_l1 <- geo$l1 %>% dplyr::filter(!is.na(lon), !is.na(lat))
+  pts_l2 <- geo$l2 %>% dplyr::filter(!is.na(lon), !is.na(lat))
+
+  all_pts <- dplyr::bind_rows(
+    pts_l0 %>% dplyr::mutate(level = "l0"),
+    pts_l1 %>% dplyr::mutate(level = "l1"),
+    pts_l2 %>% dplyr::mutate(level = "l2")
+  )
+
+  if (nrow(all_pts) == 0) {
+    return(
+      leaflet() %>%
+        addProviderTiles("CartoDB.DarkMatter") %>%
+        addControl("No locations could be geocoded at any level.",
+                   position = "topright")
+    )
+  }
+
+  # -----------------------------
+  # Metric choice with safe default
+  # -----------------------------
+  metric_choice <- input$map_metric
+
+  # When switching tabs, map_metric can come back NULL.
+  # In that case: force "records" and also reset the UI radio.
+  if (is.null(metric_choice) || !metric_choice %in% c("records", "items", "price")) {
+    metric_choice <- "records"
+    session <- shiny::getDefaultReactiveDomain()
+    if (!is.null(session)) {
+      shiny::updateRadioButtons(session, "map_metric", selected = "records")
+    }
+  }
+
+  metric_col <- switch(
+    metric_choice,
+    "items"   = "items",
+    "price"   = "price",
+    "records" = "records",
+    "records"
+  )
+
+  # Extra safety: if somehow that column is missing, fall back to records
+  if (!metric_col %in% colnames(pts_l0) ||
+      !metric_col %in% colnames(pts_l1) ||
+      !metric_col %in% colnames(pts_l2)) {
+    metric_col <- "records"
+  }
+
+  compute_radius <- function(vals) {
+    if (length(vals) == 0 || all(is.na(vals))) {
+      return(numeric(0))
+    }
+    vals_num <- ifelse(is.na(vals), 0, vals)
+    val_max  <- max(vals_num, na.rm = TRUE)
+    if (val_max <= 0) {
+      rep(8, length(vals_num))
+    } else {
+      4 + 16 * (vals_num / val_max)
+    }
+  }
+
+  lng_min <- min(all_pts$lon, na.rm = TRUE)
+  lng_max <- max(all_pts$lon, na.rm = TRUE)
+  lat_min <- min(all_pts$lat, na.rm = TRUE)
+  lat_max <- max(all_pts$lat, na.rm = TRUE)
+
+  if (nrow(pts_l0) > 0) {
+    pts_l0$radius <- compute_radius(pts_l0[[metric_col]])
+  }
+  if (nrow(pts_l1) > 0) {
+    pts_l1$radius <- compute_radius(pts_l1[[metric_col]])
+  }
+  if (nrow(pts_l2) > 0) {
+    pts_l2$radius <- compute_radius(pts_l2[[metric_col]])
+  }
+
+  group_l0 <- "Level 0 (country)"
+  group_l1 <- "Level 1 (province/state)"
+  group_l2 <- "Level 2 (district/city)"
+
+  map <- leaflet() %>%
+    addProviderTiles("CartoDB.DarkMatter")
+
+  # Level 0
+  if (nrow(pts_l0) > 0) {
+    map <- map %>%
+      addCircleMarkers(
+        data       = pts_l0,
+        lng        = ~lon,
+        lat        = ~lat,
+        radius     = ~radius * 1.8,
+        color      = "#0040FF",
+        stroke     = TRUE,
+        weight     = 1,
+        fillColor  = "#0040FF",
+        fillOpacity= 0.15,
+        opacity    = 0.4,
+        group      = group_l0
+      ) %>%
+      addCircleMarkers(
+        data       = pts_l0,
+        lng        = ~lon,
+        lat        = ~lat,
+        radius     = ~radius,
+        color      = "#006BFF",
+        stroke     = FALSE,
+        fillColor  = "#006BFF",
+        fillOpacity= 0.9,
+        label      = ~sprintf(
+          "%s<br/>Records: %s<br/>Items: %s<br/>Price: %s",
+          location_level0,
+          ifelse(is.na(records), 0, records),
+          ifelse(is.na(items),   0, items),
+          ifelse(is.na(price),   0, round(price, 2))
+        ) %>% lapply(htmltools::HTML),
+        group      = group_l0
+      )
+  }
+
+  # Level 1
+  if (nrow(pts_l1) > 0) {
+    map <- map %>%
+      addCircleMarkers(
+        data       = pts_l1,
+        lng        = ~lon,
+        lat        = ~lat,
+        radius     = ~radius * 1.8,
+        color      = "#00A3FF",
+        stroke     = TRUE,
+        weight     = 1,
+        fillColor  = "#00A3FF",
+        fillOpacity= 0.15,
+        opacity    = 0.4,
+        group      = group_l1
+      ) %>%
+      addCircleMarkers(
+        data       = pts_l1,
+        lng        = ~lon,
+        lat        = ~lat,
+        radius     = ~radius,
+        color      = "#00CFFF",
+        stroke     = FALSE,
+        fillColor  = "#00CFFF",
+        fillOpacity= 0.9,
+        label      = ~sprintf(
+          "%s, %s<br/>Records: %s<br/>Items: %s<br/>Price: %s",
+          location_level1, location_level0,
+          ifelse(is.na(records), 0, records),
+          ifelse(is.na(items),   0, items),
+          ifelse(is.na(price),   0, round(price, 2))
+        ) %>% lapply(htmltools::HTML),
+        group      = group_l1
+      )
+  }
+
+  # Level 2
+  if (nrow(pts_l2) > 0) {
+    map <- map %>%
+      addCircleMarkers(
+        data       = pts_l2,
+        lng        = ~lon,
+        lat        = ~lat,
+        radius     = ~radius * 1.8,
+        color      = "#00F5FF",
+        stroke     = TRUE,
+        weight     = 1,
+        fillColor  = "#00F5FF",
+        fillOpacity= 0.15,
+        opacity    = 0.4,
+        group      = group_l2
+      ) %>%
+      addCircleMarkers(
+        data       = pts_l2,
+        lng        = ~lon,
+        lat        = ~lat,
+        radius     = ~radius,
+        color      = "#00F5FF",
+        stroke     = FALSE,
+        fillColor  = "#00F5FF",
+        fillOpacity= 0.9,
+        label      = ~sprintf(
+          "%s%s%s<br/>Records: %s<br/>Items: %s<br/>Price: %s",
+          ifelse(!is.na(location_level2) & location_level2 != "",
+                 paste0(location_level2, ", "), ""),
+          ifelse(!is.na(location_level1) & location_level1 != "",
+                 paste0(location_level1, ", "), ""),
+          location_level0,
+          ifelse(is.na(records), 0, records),
+          ifelse(is.na(items),   0, items),
+          ifelse(is.na(price),   0, round(price, 2))
+        ) %>% lapply(htmltools::HTML),
+        group      = group_l2
+      )
+  }
+
+  groups_present <- c()
+  if (nrow(pts_l0) > 0) groups_present <- c(groups_present, group_l0)
+  if (nrow(pts_l1) > 0) groups_present <- c(groups_present, group_l1)
+  if (nrow(pts_l2) > 0) groups_present <- c(groups_present, group_l2)
+
+  if (length(groups_present) > 0) {
+    map <- map %>%
+      addLayersControl(
+        overlayGroups = groups_present,
+        options = layersControlOptions(collapsed = FALSE)
+      )
+  }
+
+  if (group_l2 %in% groups_present) {
+    if (group_l0 %in% groups_present) {
+      map <- map %>% hideGroup(group_l0)
+    }
+    if (group_l1 %in% groups_present) {
+      map <- map %>% hideGroup(group_l1)
+    }
+  }
+
+  map %>%
+    fitBounds(lng1 = lng_min, lat1 = lat_min,
+              lng2 = lng_max, lat2 = lat_max)
+})
+```
+
+### Flows map
+
+```{r}
+renderLeaflet({
+  shiny::withProgress(message = "Building flows map...", value = 0, {
+    incProgress(0.1)
+    dat <- get_filtered_data()
+
+    validate(need(all(c("origin_country", "destination_country") %in% names(dat)),
+                  "origin_country and destination_country fields not found."))
+
+    incProgress(0.4)
+    flows <- dat %>%
+      dplyr::filter(
+        !is.na(origin_country), origin_country != "",
+        !is.na(destination_country), destination_country != ""
+      ) %>%
+      dplyr::group_by(origin_country, destination_country) %>%
+      dplyr::summarise(
+        records = dplyr::n(),
+        items   = if ("item_count" %in% names(dat))
+          sum(item_count, na.rm = TRUE) else NA_real_,
+        .groups = "drop"
+      ) %>%
+      dplyr::arrange(dplyr::desc(records)) %>%
+      dplyr::slice_head(n = input$flow_top_n)
+
+    validate(need(nrow(flows) > 0,
+                  "No OD data for current filters."))
+
+    incProgress(0.6)
+    origin_coords <- world_centers %>%
+      dplyr::select(origin_country = name, o_lon = lon, o_lat = lat)
+    dest_coords <- world_centers %>%
+      dplyr::select(destination_country = name, d_lon = lon, d_lat = lat)
+
+    flows_geo <- flows %>%
+      dplyr::left_join(origin_coords, by = "origin_country") %>%
+      dplyr::left_join(dest_coords, by = "destination_country") %>%
+      dplyr::filter(!is.na(o_lon), !is.na(d_lon),
+                    !is.na(o_lat), !is.na(d_lat))
+
+    validate(need(nrow(flows_geo) > 0,
+                  "Could not geocode OD pairs."))
+
+    # ---------------------------------
+    # Build node layer (countries)
+    # ---------------------------------
+    # Outgoing flows per origin
+    orig_nodes <- flows_geo %>%
+      dplyr::group_by(origin_country, o_lon, o_lat) %>%
+      dplyr::summarise(
+        out_records = sum(records, na.rm = TRUE),
+        out_items   = sum(items,   na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      dplyr::transmute(
+        country     = origin_country,
+        lon         = o_lon,
+        lat         = o_lat,
+        out_records = out_records,
+        out_items   = out_items
+      )
+
+    # Incoming flows per destination
+    dest_nodes <- flows_geo %>%
+      dplyr::group_by(destination_country, d_lon, d_lat) %>%
+      dplyr::summarise(
+        in_records = sum(records, na.rm = TRUE),
+        in_items   = sum(items,   na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      dplyr::transmute(
+        country    = destination_country,
+        lon        = d_lon,
+        lat        = d_lat,
+        in_records = in_records,
+        in_items   = in_items
+      )
+
+    # Combine and summarise per country
+    nodes <- dplyr::bind_rows(
+      orig_nodes %>%
+        dplyr::mutate(
+          in_records = 0,
+          in_items   = 0
+        ),
+      dest_nodes %>%
+        dplyr::mutate(
+          out_records = 0,
+          out_items   = 0
+        )
+    ) %>%
+      dplyr::group_by(country, lon, lat) %>%
+      dplyr::summarise(
+        out_records = sum(out_records, na.rm = TRUE),
+        in_records  = sum(in_records,  na.rm = TRUE),
+        out_items   = sum(out_items,   na.rm = TRUE),
+        in_items    = sum(in_items,    na.rm = TRUE),
+        .groups     = "drop"
+      ) %>%
+      dplyr::mutate(
+        total_records = out_records + in_records,
+        total_items   = out_items   + in_items
+      ) %>%
+      dplyr::filter(!is.na(lon), !is.na(lat), !is.na(country))
+
+    # Scale node radius by total_records (sqrt to avoid huge bubbles)
+    if (nrow(nodes) > 0) {
+      max_rec_nodes <- max(nodes$total_records, na.rm = TRUE)
+      if (!is.finite(max_rec_nodes) || max_rec_nodes <= 0) {
+        nodes$radius <- 6
+      } else {
+        nodes$radius <- 4 + 8 * sqrt(nodes$total_records / max_rec_nodes)
+      }
+    }
+
+    # ---------------------------------
+    # Map bounds
+    # ---------------------------------
+    lng_min <- min(c(flows_geo$o_lon, flows_geo$d_lon), na.rm = TRUE)
+    lng_max <- max(c(flows_geo$o_lon, flows_geo$d_lon), na.rm = TRUE)
+    lat_min <- min(c(flows_geo$o_lat, flows_geo$d_lat), na.rm = TRUE)
+    lat_max <- max(c(flows_geo$o_lat, flows_geo$d_lat), na.rm = TRUE)
+
+    incProgress(0.9)
+    map <- leaflet() %>%
+      addProviderTiles("CartoDB.DarkMatter")
+
+    # ---------------------------------
+    # Flow lines (OD links)
+    # ---------------------------------
+    if (nrow(flows_geo) > 0) {
+      max_rec_flow <- max(flows_geo$records, na.rm = TRUE)
+      map <- map %>%
+        addPolylines(
+          data = flows_geo,
+          lng = ~c(o_lon, d_lon),
+          lat = ~c(o_lat, d_lat),
+          weight = ~1 + 5 * (records / max_rec_flow),
+          opacity = 0.55,
+          color = "#00F5FF",
+          group = "Flows",
+          label = ~sprintf(
+            "%s \u2192 %s<br/>Records: %s<br/>Items: %s",
+            origin_country, destination_country,
+            records,
+            ifelse(is.na(items), 0, items)
+          ) %>% lapply(htmltools::HTML)
+        )
+    }
+
+    # ---------------------------------
+    # Country nodes (distinct points)
+    # ---------------------------------
+    if (nrow(nodes) > 0) {
+      map <- map %>%
+        addCircleMarkers(
+          data = nodes,
+          lng = ~lon,
+          lat = ~lat,
+          radius = ~radius,
+          stroke = TRUE,
+          weight = 1,
+          color = "#00A3FF",
+          fillColor = "#001F3F",
+          fillOpacity = 0.9,
+          group = "Countries",
+          label = ~sprintf(
+            "%s<br/>Total records: %s<br/>Out: %s<br/>In: %s<br/>Total items: %s",
+            country,
+            total_records,
+            out_records,
+            in_records,
+            total_items
+          ) %>% lapply(htmltools::HTML)
+        )
+    }
+
+    # ---------------------------------
+    # Layer control + view
+    # ---------------------------------
+    overlay_groups <- c()
+    if (nrow(nodes) > 0)     overlay_groups <- c(overlay_groups, "Countries")
+    if (nrow(flows_geo) > 0) overlay_groups <- c(overlay_groups, "Flows")
+
+    if (length(overlay_groups) > 0) {
+      map <- map %>%
+        addLayersControl(
+          overlayGroups = overlay_groups,
+          options = layersControlOptions(collapsed = FALSE)
+        )
+    }
+
+    map %>%
+      fitBounds(
+        lng1 = lng_min, lat1 = lat_min,
+        lng2 = lng_max, lat2 = lat_max
+      )
+
+    incProgress(1)
+    map
+  })
+})
+```
+
+Network Analysis {data-icon="fa-project-diagram"}
+=====================================
+
+Row {.tabset data-height=200}
+-------------------------------------
+
+### Network controls
+
+```{r net_controls_and_risk_info, echo=FALSE}
+# ===============================
+# Network controls (right-justified Risk Score Info) + detailed Risk Score modal
+# Replace your current "Network controls" chunk AND your current net_risk_modal chunk with THIS.
+# Uses ``` instead of ``` to avoid chat markdown issues. Replace ``` with ``` after pasting.
+# ===============================
+
+if (!"htmltools" %in% .packages()) suppressWarnings(require(htmltools))
+
+htmltools::tags$style(HTML("
+  /* ---------------------------------------------------------
+     App theme palette (greys / blacks / cyan)
+     --------------------------------------------------------- */
+  :root{
+    --bg0: #000000;
+    --bg1: #0B0F14;
+    --bg2: #111821;
+    --grey1: #1B2530;
+    --grey2: #2A3644;
+    --text0: #E6F7FF;
+    --text1: #CFEFFF;
+    --text2: #9FD9E8;
+    --cyan0: #00F5FF;
+    --cyan1: #00C9FF;
+    --cyan2: #008FB3;
+  }
+
+  /* ---------------------------------------------------------
+     Controls row (radioButtons + right-justified info button)
+     --------------------------------------------------------- */
+  .net-controls-row{
+    display:flex;
+    align-items:flex-end;
+    gap:14px;
+    flex-wrap:wrap;
+    margin-bottom:8px;
+    width:100%;
+  }
+  .net-controls-row .form-group{ margin-bottom:0 !important; }
+
+  .net-risk-right{
+    margin-left:auto;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    white-space:nowrap;
+    padding-bottom:2px;
+  }
+  .net-risk-label{
+    color: var(--cyan0);
+    font-weight:800;
+    margin:0;
+    font-size:13px;
+    line-height:1;
+  }
+  .net-risk-btn{
+    background: var(--bg0) !important;
+    color: var(--cyan0) !important;
+    border:1px solid var(--cyan1) !important;
+    border-radius:999px !important;
+    width:28px !important;
+    height:28px !important;
+    padding:0 !important;
+    font-weight:900 !important;
+    line-height:26px !important;
+    font-size:12px !important;
+  }
+  .net-risk-btn:focus{ outline:none !important; box-shadow: 0 0 0 2px rgba(0,201,255,0.25) !important; }
+  .net-risk-btn:hover{
+    border-color: var(--cyan0) !important;
+    color: var(--cyan0) !important;
+    box-shadow: 0 0 14px rgba(0,245,255,0.18) !important;
+  }
+
+  /* Radio button labels slightly muted */
+  .net-controls-row label.control-label{
+    color: var(--text1) !important;
+    font-weight:800 !important;
+  }
+  .net-controls-row .radio-inline{
+    color: var(--text0) !important;
+  }
+
+  /* ---------------------------------------------------------
+     Modal theming (Bootstrap modalDialog)
+     --------------------------------------------------------- */
+  .modal-content{
+    background: var(--bg1) !important;
+    color: var(--text0) !important;
+    border: 1px solid var(--cyan1) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 0 22px rgba(0,201,255,0.18) !important;
+  }
+  .modal-header{
+    border-bottom: 1px solid rgba(0,201,255,0.35) !important;
+    background: linear-gradient(180deg, rgba(0,201,255,0.08), rgba(0,0,0,0)) !important;
+  }
+  .modal-title{
+    color: var(--cyan0) !important;
+    font-weight:900 !important;
+  }
+  .modal-body{
+    background: var(--bg1) !important;
+  }
+  .modal-footer{
+    border-top: 1px solid rgba(0,201,255,0.35) !important;
+    background: var(--bg1) !important;
+  }
+
+  /* Close button */
+  .modal-header .close{
+    color: var(--text0) !important;
+    opacity: 0.85 !important;
+    text-shadow: none !important;
+  }
+  .modal-header .close:hover{
+    opacity: 1 !important;
+    color: var(--cyan0) !important;
+  }
+
+  /* Text hierarchy in modal */
+  .risk-modal h4{
+    color: var(--cyan0) !important;
+    font-weight:900 !important;
+    margin-top:12px !important;
+  }
+  .risk-modal h5{
+    color: var(--text0) !important;
+    font-weight:900 !important;
+    margin-top:12px !important;
+  }
+  .risk-modal p, .risk-modal li{
+    color: var(--text0) !important;
+  }
+  .risk-modal ul{
+    margin-left: 18px;
+  }
+  .risk-modal b{
+    color: #FFFFFF !important;
+  }
+  .risk-modal hr{
+    border-color: rgba(0,201,255,0.35) !important;
+  }
+
+  /* Code blocks */
+  .risk-modal pre{
+    background: var(--bg0) !important;
+    color: var(--cyan0) !important;
+    border: 1px solid var(--cyan1) !important;
+    border-radius: 12px !important;
+    padding: 12px !important;
+    white-space: pre-wrap !important;
+  }
+
+  /* Buttons inside modal */
+  .modal-footer .btn{
+    border-radius: 10px !important;
+  }
+  .modal-footer .btn-default,
+  .modal-footer .btn{
+    background: var(--bg0) !important;
+    color: var(--cyan0) !important;
+    border: 1px solid var(--cyan1) !important;
+  }
+  .modal-footer .btn:hover{
+    border-color: var(--cyan0) !important;
+    box-shadow: 0 0 14px rgba(0,245,255,0.18) !important;
+  }
+"))
+
+# ---------------------------
+# Controls row (no slider)
+# ---------------------------
+htmltools::div(
+  class = "net-controls-row",
+
+  radioButtons(
+    "net_mode",
+    "Network mode",
+    choices = c(
+      "Platform – Seller" = "platform",
+      "Group – Seller"    = "group",
+      "Seller – Level 1"  = "level1"
+    ),
+    selected = "platform",
+    inline = TRUE
+  ),
+
+  htmltools::div(
+    class = "net-risk-right",
+    htmltools::span("Risk Score Info", class = "net-risk-label"),
+    actionButton("btn_risk_help", label = "i", class = "net-risk-btn")
+  )
+)
+
+# ---------------------------
+# Modal (unchanged content, themed by CSS above)
+# ---------------------------
+observeEvent(input$btn_risk_help, {
+
+  showModal(modalDialog(
+    title = "Seller risk score (0–100): how it works and how to use it",
+    easyClose = TRUE,
+    footer = modalButton("Close"),
+    size = "l",
+
+    htmltools::div(
+      class = "risk-modal",
+
+      htmltools::h4("What this score is"),
+      htmltools::p(
+        "The seller risk score is a prioritisation metric designed to help analysts identify ",
+        "which sellers warrant closer scrutiny and potential law-enforcement coordination. ",
+        "It is calculated per seller using ONLY the records currently visible under your active filters ",
+        "(date range, taxa, platform/group, geography, etc.)."
+      ),
+      htmltools::p(
+        htmltools::tags$b("It is not a legal determination. "),
+        "It does not prove illegality, guilt, or intent. It ranks sellers relative to one another ",
+        "based on observable risk signals in the data."
+      ),
+
+      htmltools::tags$hr(),
+
+      htmltools::h4("What data is used"),
+      htmltools::p("The score draws only from structured fields already present in the dataset. No external intelligence is injected."),
+      htmltools::tags$ul(
+        htmltools::tags$li(htmltools::tags$b("Species & legal status:"), " CITES Appendix (I/II), Case-of-Interest flag."),
+        htmltools::tags$li(htmltools::tags$b("Seller activity:"), " Number of records, quantities (when available)."),
+        htmltools::tags$li(htmltools::tags$b("Economic signals:"), " Prices or values (when stated)."),
+        htmltools::tags$li(htmltools::tags$b("Geography:"), " Origin–destination fields, country/province spread."),
+        htmltools::tags$li(htmltools::tags$b("Operational indicators:"), " Contact details, payment methods, delivery methods, platform/group breadth.")
+      ),
+
+      htmltools::tags$hr(),
+
+      htmltools::h4("How the score is constructed (A–E)"),
+      htmltools::p(
+        "Each seller receives five component scores. The weights reflect investigative value, ",
+        "not moral judgement. Weights sum to 100."
+      ),
+
+      htmltools::h5("A. Species & Legal Severity (0–30)"),
+      htmltools::p(
+        "Prioritises conservation and legal seriousness. CITES Appendix I is weighted most heavily, ",
+        "followed by Appendix II and Case-of-Interest flags."
+      ),
+      htmltools::p(htmltools::tags$b("Why it matters:"), 
+                   "Trade involving highly protected species generally carries higher harm and enforcement priority."),
+
+      htmltools::h5("B. Scale & Volume (0–25)"),
+      htmltools::p(
+        "Captures how active a seller is. Uses number of listings and quantities where available, ",
+        "rescaled relative to other sellers in the current view."
+      ),
+      htmltools::p(htmltools::tags$b("Why it matters:"), 
+                   "Repeated activity and higher volumes distinguish active suppliers from occasional sellers."),
+
+      htmltools::h5("C. Market Value (0–15)"),
+      htmltools::p(
+        "Uses total stated value or prices when present. Missing prices do not penalise the seller; ",
+        "they simply reduce the contribution of this component."
+      ),
+      htmltools::p(htmltools::tags$b("Why it matters:"), 
+                   "High-value trade can indicate organised activity, but price data is often incomplete or strategic."),
+
+      htmltools::h5("D. Reach & Geographic Complexity (0–20)"),
+      htmltools::p(
+        "Captures spatial reach: international origin-destination signals, multiple routes, ",
+        "and spread across countries or provinces."
+      ),
+      htmltools::p(htmltools::tags$b("Why it matters:"), 
+                   "Broader geographic reach suggests logistics, networks, and higher coordination capacity."),
+
+      htmltools::h5("E. Operational Sophistication (0–10)"),
+      htmltools::p(
+        "Uses presence of contact details and diversity of payment, delivery, and platform/group usage."
+      ),
+      htmltools::p(htmltools::tags$b("Why it matters:"), 
+                   "These signals increase actionability and indicate sellers who know how to transact and evade friction."),
+
+      htmltools::tags$hr(),
+
+      htmltools::h4("Handling missing data: confidence adjustment"),
+      htmltools::p(
+        "Missing fields are common in online trade data and do NOT imply low risk. ",
+        "To avoid treating absence of evidence as evidence of innocence, the raw score is adjusted ",
+        "by an evidence completeness factor."
+      ),
+      htmltools::tags$ul(
+        htmltools::tags$li("Confidence reflects how many key fields are present (CITES, quantity, price, OD, contact)."),
+        htmltools::tags$li("Scores are never reduced below 60% of their raw value."),
+        htmltools::tags$li("High-evidence sellers are emphasised; low-evidence sellers remain visible.")
+      ),
+
+      htmltools::tags$hr(),
+
+      htmltools::h4("Why scores are scaled to 0–100 (relative ranking)"),
+      htmltools::p(
+        "The initial raw score is conservative by design. In heterogeneous datasets, ",
+        "this can cause even the most prolific sellers to cluster at moderate values (e.g. 30–40)."
+      ),
+      htmltools::p(
+        "To make the score operationally useful, a dataset-relative scaling step is applied. ",
+        "This stretches the distribution so the highest-risk sellers in the CURRENT filtered view ",
+        "appear near the top of the 0–100 range."
+      ),
+      htmltools::p(
+        htmltools::tags$b("Important: "),
+        "Scaling preserves ordering. It does not invent new risk, add evidence, or make scores comparable ",
+        "across different filter contexts."
+      ),
+
+      htmltools::tags$hr(),
+
+      htmltools::h4("Complete calculation (end-to-end)"),
+      htmltools::pre(
+"
+A = 30 * min(1, 1.0*pCITES_I + 0.5*pCITES_II + 0.33*COI)
+B = 25 * (0.6*records_scaled + 0.4*quantity_scaled)
+C = 15 * value_scaled
+D = 20 * min(1, 0.4*international + 0.3*OD_scaled + 0.3*geo_scaled)
+E = 10 * min(1, 0.4*contact + 0.2*payment + 0.2*delivery + 0.2*platform)
+
+Risk_raw = A + B + C + D + E
+
+Confidence = mean(has_CITES, has_quantity, has_price, has_OD, has_contact)
+
+Risk_base = clamp(Risk_raw * (0.6 + 0.4*Confidence), 0, 100)
+
+Risk_final = quantile_rescale(Risk_base, 5th → 0, 98th → 100)
+"
+      ),
+
+      htmltools::tags$hr(),
+
+      htmltools::h4("How to interpret the final score"),
+      htmltools::tags$ul(
+        htmltools::tags$li(htmltools::tags$b("80–100:"), " Highest-priority sellers in the current dataset slice."),
+        htmltools::tags$li(htmltools::tags$b("60–79:"),  " Strong risk signals; monitor closely and enrich evidence."),
+        htmltools::tags$li(htmltools::tags$b("40–59:"),  " Moderate signals; keep on watchlists."),
+        htmltools::tags$li(htmltools::tags$b("<40:"),    " Lower relative priority, not necessarily low risk.")
+      ),
+
+      htmltools::p(
+        htmltools::tags$b("How to Use: "),
+        "Use this score to decide where to spend limited analytical and enforcement resources first. ",
+        "Always interpret it alongside the underlying records, network structure, and contextual intelligence.",
+        "The radar chart for a selected seller shows the contribution of these same five components (A–E)",
+        "and the evidence completeness score, each rescaled from 0–100 across all sellers in the current view."
+      )
+    )
+  ))
+})
+```
+
+
+Row {data-height=650}
+-------------------------------------
+
+### Seller risk component radar {data-width=200}
+
+```{r seller_risk_radar, echo=FALSE}
+if (!"plotly" %in% .packages()) suppressWarnings(require(plotly))
+if (!"dplyr" %in% .packages()) suppressWarnings(require(dplyr))
+if (!"tidyr" %in% .packages()) suppressWarnings(require(tidyr))
+
+renderPlotly({
+
+  dat <- get_filtered_data()
+
+  # --------- Guard rails ----------
+  if (is.null(dat) || nrow(dat) == 0 || !"item_seller_name" %in% names(dat)) {
+    return(
+      plotly::plot_ly() %>%
+        plotly::layout(
+          title = list(text = "Select a seller to view radar", font = list(color = "#00F5FF", size = 14)),
+          paper_bgcolor = "rgba(0,0,0,0)",
+          plot_bgcolor  = "rgba(0,0,0,0)",
+          margin = list(l = 10, r = 10, b = 10, t = 40)
+        )
+    )
+  }
+
+  sel <- input$net_graph_selected
+  if (is.null(sel) || is.null(sel$nodes) || length(sel$nodes) == 0) {
+    return(
+      plotly::plot_ly() %>%
+        plotly::layout(
+          title = list(text = "Select a seller node in the network", font = list(color = "#00F5FF", size = 14)),
+          paper_bgcolor = "rgba(0,0,0,0)",
+          plot_bgcolor  = "rgba(0,0,0,0)",
+          margin = list(l = 10, r = 10, b = 10, t = 40)
+        )
+    )
+  }
+
+  node_id <- sel$nodes[[1]]
+  if (!startsWith(node_id, "seller:")) {
+    return(
+      plotly::plot_ly() %>%
+        plotly::layout(
+          title = list(text = "Select a SELLER node (not a hub)", font = list(color = "#00F5FF", size = 14)),
+          paper_bgcolor = "rgba(0,0,0,0)",
+          plot_bgcolor  = "rgba(0,0,0,0)",
+          margin = list(l = 10, r = 10, b = 10, t = 40)
+        )
+    )
+  }
+
+  seller_name <- sub("^seller:", "", node_id)
+
+  # --------- Helpers ----------
+  rescale01 <- function(x) {
+    x <- suppressWarnings(as.numeric(x))
+    if (length(x) == 0) return(numeric(0))
+    if (all(is.na(x))) return(rep(0, length(x)))
+    rng <- range(x, na.rm = TRUE)
+    if (!is.finite(rng[1]) || !is.finite(rng[2]) || rng[1] == rng[2]) return(rep(0, length(x)))
+    (x - rng[1]) / (rng[2] - rng[1])
+  }
+
+  minmax100 <- function(x) {
+    x <- suppressWarnings(as.numeric(x))
+    if (length(x) == 0) return(numeric(0))
+    if (all(is.na(x))) return(rep(0, length(x)))
+    rng <- range(x, na.rm = TRUE)
+    if (!is.finite(rng[1]) || !is.finite(rng[2]) || rng[1] == rng[2]) return(rep(50, length(x)))
+    (x - rng[1]) / (rng[2] - rng[1]) * 100
+  }
+
+  split_tokens <- function(x) {
+    x <- as.character(x)
+    x <- x[!is.na(x) & x != ""]
+    if (length(x) == 0) return(character())
+    toks <- unlist(strsplit(x, ","))
+    toks <- trimws(toks)
+    toks <- toks[toks != ""]
+    unique(toks)
+  }
+
+  # --------- Build per-seller components (same signals as your risk score) ----------
+  dd <- dat %>%
+    mutate(item_seller_name = as.character(item_seller_name)) %>%
+    filter(!is.na(item_seller_name), item_seller_name != "")
+
+  if (nrow(dd) == 0) {
+    return(
+      plotly::plot_ly() %>%
+        plotly::layout(
+          title = list(text = "No sellers under current filters", font = list(color = "#00F5FF", size = 14)),
+          paper_bgcolor = "rgba(0,0,0,0)",
+          plot_bgcolor  = "rgba(0,0,0,0)",
+          margin = list(l = 10, r = 10, b = 10, t = 40)
+        )
+    )
+  }
+
+  # CITES normalization
+  cites_vec <- rep(NA_character_, nrow(dd))
+  if ("item_CITES" %in% names(dd)) {
+    cites_vec <- toupper(trimws(as.character(dd$item_CITES)))
+  } else if ("item_cites" %in% names(dd)) {
+    cites_vec <- toupper(trimws(as.character(dd$item_cites)))
+  }
+  cites_vec[cites_vec %in% c(
+    "", "NA", "NAN",
+    "NON CITES", "NON-CITES", "NOT CITES", "NOT LISTED", "NON CITES SPECIES", "NON CITES SPECIE"
+  )] <- NA_character_
+  dd$cites_std <- cites_vec
+
+  # COI
+  dd$coi_ind <- 0L
+  if ("is_case_of_interest" %in% names(dd)) {
+    coi_raw <- dd$is_case_of_interest
+    dd$coi_ind <- ifelse(isTRUE(coi_raw) | coi_raw %in% c(1, "1", "TRUE", "True", "yes", "Yes"), 1L, 0L)
+  }
+
+  # Numeric coercions
+  dd$item_count_num <- if ("item_count" %in% names(dd)) suppressWarnings(as.numeric(dd$item_count)) else NA_real_
+  dd$item_price_num <- if ("item_price" %in% names(dd)) suppressWarnings(as.numeric(dd$item_price)) else NA_real_
+
+  # Evidence flags
+  dd$has_cites   <- ifelse(!is.na(dd$cites_std) & dd$cites_std != "", 1L, 0L)
+  dd$has_qty     <- ifelse(!is.na(dd$item_count_num), 1L, 0L)
+  dd$has_price   <- ifelse(!is.na(dd$item_price_num), 1L, 0L)
+  dd$has_od      <- 0L
+  if (all(c("origin_country", "destination_country") %in% names(dd))) {
+    dd$has_od <- ifelse(
+      (!is.na(dd$origin_country) & dd$origin_country != "") |
+        (!is.na(dd$destination_country) & dd$destination_country != ""),
+      1L, 0L
+    )
+  }
+  dd$has_contact <- 0L
+  if ("item_seller_contact" %in% names(dd)) {
+    dd$has_contact <- ifelse(!is.na(dd$item_seller_contact) & dd$item_seller_contact != "", 1L, 0L)
+  }
+
+  dd$platform_std <- if ("platform_name" %in% names(dd)) ifelse(is.na(dd$platform_name) | dd$platform_name == "", NA_character_, as.character(dd$platform_name)) else NA_character_
+  dd$group_std    <- if ("group_name" %in% names(dd)) ifelse(is.na(dd$group_name) | dd$group_name == "", NA_character_, as.character(dd$group_name)) else NA_character_
+
+  seller_sum <- dd %>%
+    group_by(item_seller_name) %>%
+    summarise(
+      n_records = n(),
+      p_cites_I  = mean(cites_std %in% c("I", "CITES I", "APPENDIX I", "CITES APPENDIX I", "I/II"), na.rm = TRUE),
+      p_cites_II = mean(cites_std %in% c("II", "CITES II", "APPENDIX II", "CITES APPENDIX II", "I/II"), na.rm = TRUE),
+      any_coi    = as.integer(any(coi_ind == 1L, na.rm = TRUE)),
+      qty_sum    = if (all(is.na(item_count_num))) NA_real_ else sum(item_count_num, na.rm = TRUE),
+      val_sum    = if (all(is.na(item_price_num))) NA_real_ else sum(item_price_num, na.rm = TRUE),
+      any_int = if (all(c("origin_country", "destination_country") %in% names(dd))) {
+        as.integer(any(!is.na(origin_country) & origin_country != "" & !is.na(destination_country) & destination_country != ""))
+      } else 0L,
+      n_od_pairs = if (all(c("origin_country", "destination_country") %in% names(dd))) {
+        dplyr::n_distinct(paste0(origin_country, "→", destination_country), na.rm = TRUE)
+      } else 0L,
+      n_geos = if (all(c("location_level0", "location_level1", "location_level2") %in% names(dd))) {
+        dplyr::n_distinct(paste0(location_level0, "|", location_level1, "|", location_level2), na.rm = TRUE)
+      } else 0L,
+      has_contact_any = as.integer(any(has_contact == 1L, na.rm = TRUE)),
+      n_platforms = dplyr::n_distinct(platform_std, na.rm = TRUE),
+      n_groups    = dplyr::n_distinct(group_std, na.rm = TRUE),
+      n_pay_methods = if ("payment_method" %in% names(dd)) length(split_tokens(payment_method)) else 0L,
+      n_del_methods = if ("delivery_method" %in% names(dd)) length(split_tokens(delivery_method)) else 0L,
+      conf = mean(c(
+        as.numeric(mean(has_cites, na.rm = TRUE)),
+        as.numeric(mean(has_qty, na.rm = TRUE)),
+        as.numeric(mean(has_price, na.rm = TRUE)),
+        as.numeric(mean(has_od, na.rm = TRUE)),
+        as.numeric(mean(has_contact, na.rm = TRUE))
+      ), na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(conf = ifelse(is.na(conf), 0, pmin(pmax(conf, 0), 1)))
+
+  # Match your network threshold (keeps radar relative to the sellers actually shown)
+  min_rec <- 3
+  seller_sum <- seller_sum %>% filter(n_records >= min_rec)
+
+  if (nrow(seller_sum) == 0 || !seller_name %in% seller_sum$item_seller_name) {
+    return(
+      plotly::plot_ly() %>%
+        plotly::layout(
+          title = list(text = "Seller not in current view (or < 3 records)", font = list(color = "#00F5FF", size = 14)),
+          paper_bgcolor = "rgba(0,0,0,0)",
+          plot_bgcolor  = "rgba(0,0,0,0)",
+          margin = list(l = 10, r = 10, b = 10, t = 40)
+        )
+    )
+  }
+
+  # Component construction (same structure as your risk score)
+  seller_sum <- seller_sum %>%
+    mutate(
+      R_s   = rescale01(n_records),
+      Q_s   = ifelse(all(is.na(qty_sum)), 0, rescale01(tidyr::replace_na(qty_sum, 0))),
+      V_s   = ifelse(all(is.na(val_sum)), 0, rescale01(tidyr::replace_na(val_sum, 0))),
+      OD_s  = rescale01(n_od_pairs),
+      GEO_s = rescale01(n_geos),
+      PAY_s = rescale01(n_pay_methods),
+      DEL_s = rescale01(n_del_methods),
+      PLAT_s = rescale01(pmax(n_platforms, n_groups, na.rm = TRUE)),
+
+      A = 30 * pmin(1, (1.0 * p_cites_I) + (0.5 * p_cites_II) + (0.33 * any_coi)),
+      B = 25 * ((0.6 * R_s) + (0.4 * Q_s)),
+      C = 15 * V_s,
+      D = 20 * pmin(1, (0.4 * any_int) + (0.3 * OD_s) + (0.3 * GEO_s)),
+      E = 10 * pmin(1, (0.4 * has_contact_any) + (0.2 * PAY_s) + (0.2 * DEL_s) + (0.2 * PLAT_s))
+    )
+
+  # Min-max scale each component to 0-100 across sellers in the CURRENT filtered subset
+  scaled <- seller_sum %>%
+    mutate(
+      Severity = minmax100(A),
+      Volume   = minmax100(B),
+      Value    = minmax100(C),
+      Geography= minmax100(D),
+      Ops      = minmax100(E),
+      Evidence = minmax100(conf)
+    ) %>%
+    filter(item_seller_name == seller_name) %>%
+    slice(1)
+
+  r_vals <- c(
+    scaled$Severity,
+    scaled$Volume,
+    scaled$Value,
+    scaled$Geography,
+    scaled$Ops,
+    scaled$Evidence
+  )
+
+  theta <- c("Species", "Volume", "Value", "Geo", "Ops", "Evidence")
+
+  # close the polygon
+  r_vals <- c(r_vals, r_vals[1])
+  theta  <- c(theta,  theta[1])
+
+  plotly::plot_ly(
+    type  = "scatterpolar",
+    r     = r_vals,
+    theta = theta,
+    mode  = "lines+markers",
+    fill  = "toself",
+    line  = list(color = "#00F5FF", width = 2),
+    marker= list(color = "#00F5FF", size = 6),
+    fillcolor = "rgba(0,245,255,0.18)",
+    hoverinfo = "text",
+    text = paste0(theta, ": ", round(r_vals, 1))
+  ) %>%
+    plotly::layout(
+      title = list(
+        text = paste0("Seller Risk:<br>", htmltools::htmlEscape(seller_name)),
+        font = list(color = "#00F5FF", size = 12)
+      ),
+      polar = list(
+        bgcolor = "rgba(0,0,0,0)",
+        radialaxis = list(
+          visible = TRUE,
+          range = c(0, 100),
+          tickfont = list(color = "#CFEFFF", size = 10),
+          gridcolor = "rgba(0,201,255,0.18)",
+          linecolor = "rgba(0,201,255,0.35)"
+        ),
+        angularaxis = list(
+          tickfont = list(color = "#E6F7FF", size = 10),
+          gridcolor = "rgba(0,201,255,0.12)",
+          linecolor = "rgba(0,201,255,0.35)"
+        )
+      ),
+      paper_bgcolor = "rgba(0,0,0,0)",
+      plot_bgcolor  = "rgba(0,0,0,0)",
+      height = 300,
+      margin = list(l = 10, r = 10, b = 10, t = 55)
+    )
+})
+```
+
+### Seller / platform network
+
+```{r net_graph}
+renderVisNetwork({
+  dat <- get_filtered_data()
+
+  mode    <- input$net_mode
+  min_rec <- 3
+
+  # -------------------------------
+  # Helper: rescale to 0-1 robustly
+  # -------------------------------
+  rescale01 <- function(x) {
+    x <- suppressWarnings(as.numeric(x))
+    if (length(x) == 0) return(numeric(0))
+    if (all(is.na(x))) return(rep(0, length(x)))
+    rng <- range(x, na.rm = TRUE)
+    if (!is.finite(rng[1]) || !is.finite(rng[2]) || rng[1] == rng[2]) {
+      return(rep(0, length(x)))
+    }
+    (x - rng[1]) / (rng[2] - rng[1])
+  }
+
+  # ------------------------------------------
+  # Helper: risk score 0-100 + confidence 0-1
+  # with dataset-relative scaling
+  # ------------------------------------------
+  compute_seller_risk <- function(d) {
+    if (!"item_seller_name" %in% names(d)) {
+      return(tibble(item_seller_name = character(), risk_score = numeric(), confidence = numeric()))
+    }
+
+    dd <- d %>%
+      mutate(item_seller_name = as.character(item_seller_name)) %>%
+      filter(!is.na(item_seller_name), item_seller_name != "")
+
+    if (nrow(dd) == 0) {
+      return(tibble(item_seller_name = character(), risk_score = numeric(), confidence = numeric()))
+    }
+
+    # CITES normalization
+    cites_vec <- rep(NA_character_, nrow(dd))
+    if ("item_CITES" %in% names(dd)) {
+      cites_vec <- toupper(trimws(as.character(dd$item_CITES)))
+    } else if ("item_cites" %in% names(dd)) {
+      cites_vec <- toupper(trimws(as.character(dd$item_cites)))
+    }
+    cites_vec[cites_vec %in% c(
+      "", "NA", "NAN",
+      "NON CITES", "NON-CITES", "NOT CITES", "NOT LISTED", "NON CITES SPECIES", "NON CITES SPECIE"
+    )] <- NA_character_
+    dd$cites_std <- cites_vec
+
+    # COI
+    coi_ind <- rep(0L, nrow(dd))
+    if ("is_case_of_interest" %in% names(dd)) {
+      coi_raw <- dd$is_case_of_interest
+      coi_ind <- ifelse(
+        isTRUE(coi_raw) | coi_raw %in% c(1, "1", "TRUE", "True", "yes", "Yes"),
+        1L, 0L
+      )
+    }
+    dd$coi_ind <- coi_ind
+
+    # Numeric coercions
+    if ("item_count" %in% names(dd)) dd$item_count_num <- suppressWarnings(as.numeric(dd$item_count)) else dd$item_count_num <- NA_real_
+    if ("item_price" %in% names(dd)) dd$item_price_num <- suppressWarnings(as.numeric(dd$item_price)) else dd$item_price_num <- NA_real_
+
+    # Confidence flags
+    dd$has_cites  <- ifelse(!is.na(dd$cites_std) & dd$cites_std != "", 1L, 0L)
+    dd$has_qty    <- ifelse(!is.na(dd$item_count_num), 1L, 0L)
+    dd$has_price  <- ifelse(!is.na(dd$item_price_num), 1L, 0L)
+
+    has_origin_dest <- rep(0L, nrow(dd))
+    if (all(c("origin_country", "destination_country") %in% names(dd))) {
+      has_origin_dest <- ifelse(
+        (!is.na(dd$origin_country) & dd$origin_country != "") |
+          (!is.na(dd$destination_country) & dd$destination_country != ""),
+        1L, 0L
+      )
+    }
+    dd$has_od <- has_origin_dest
+
+    has_contact <- rep(0L, nrow(dd))
+    if ("item_seller_contact" %in% names(dd)) {
+      has_contact <- ifelse(!is.na(dd$item_seller_contact) & dd$item_seller_contact != "", 1L, 0L)
+    }
+    dd$has_contact <- has_contact
+
+    # Platform / group breadth
+    dd$platform_std <- if ("platform_name" %in% names(dd)) ifelse(is.na(dd$platform_name) | dd$platform_name == "", NA_character_, as.character(dd$platform_name)) else NA_character_
+    dd$group_std    <- if ("group_name" %in% names(dd)) ifelse(is.na(dd$group_name) | dd$group_name == "", NA_character_, as.character(dd$group_name)) else NA_character_
+
+    split_tokens <- function(x) {
+      x <- as.character(x)
+      x <- x[!is.na(x) & x != ""]
+      if (length(x) == 0) return(character())
+      toks <- unlist(strsplit(x, ","))
+      toks <- trimws(toks)
+      toks <- toks[toks != ""]
+      unique(toks)
+    }
+
+    seller_sum <- dd %>%
+      group_by(item_seller_name) %>%
+      summarise(
+        n_records = n(),
+        p_cites_I  = mean(cites_std %in% c("I", "CITES I", "APPENDIX I", "CITES APPENDIX I", "I/II"), na.rm = TRUE),
+        p_cites_II = mean(cites_std %in% c("II", "CITES II", "APPENDIX II", "CITES APPENDIX II", "I/II"), na.rm = TRUE),
+        any_coi    = as.integer(any(coi_ind == 1L, na.rm = TRUE)),
+
+        qty_sum    = if (all(is.na(item_count_num))) NA_real_ else sum(item_count_num, na.rm = TRUE),
+        val_sum    = if (all(is.na(item_price_num))) NA_real_ else sum(item_price_num, na.rm = TRUE),
+
+        any_int = if (all(c("origin_country", "destination_country") %in% names(dd))) {
+          as.integer(any(!is.na(origin_country) & origin_country != "" & !is.na(destination_country) & destination_country != ""))
+        } else 0L,
+
+        n_od_pairs = if (all(c("origin_country", "destination_country") %in% names(dd))) {
+          dplyr::n_distinct(paste0(origin_country, "→", destination_country), na.rm = TRUE)
+        } else 0L,
+
+        n_geos = if (all(c("location_level0", "location_level1", "location_level2") %in% names(dd))) {
+          dplyr::n_distinct(paste0(location_level0, "|", location_level1, "|", location_level2), na.rm = TRUE)
+        } else 0L,
+
+        has_contact_any = as.integer(any(has_contact == 1L, na.rm = TRUE)),
+        n_platforms = dplyr::n_distinct(platform_std, na.rm = TRUE),
+        n_groups    = dplyr::n_distinct(group_std, na.rm = TRUE),
+        n_pay_methods = if ("payment_method" %in% names(dd)) length(split_tokens(payment_method)) else 0L,
+        n_del_methods = if ("delivery_method" %in% names(dd)) length(split_tokens(delivery_method)) else 0L,
+
+        conf = mean(c(
+          as.numeric(mean(has_cites, na.rm = TRUE)),
+          as.numeric(mean(has_qty,   na.rm = TRUE)),
+          as.numeric(mean(has_price, na.rm = TRUE)),
+          as.numeric(mean(has_od,    na.rm = TRUE)),
+          as.numeric(mean(has_contact, na.rm = TRUE))
+        ), na.rm = TRUE),
+
+        .groups = "drop"
+      ) %>%
+      mutate(conf = ifelse(is.na(conf), 0, pmin(pmax(conf, 0), 1)))
+
+    seller_sum <- seller_sum %>%
+      mutate(
+        R_s   = rescale01(n_records),
+        Q_s   = ifelse(all(is.na(qty_sum)), 0, rescale01(replace_na(qty_sum, 0))),
+        V_s   = ifelse(all(is.na(val_sum)), 0, rescale01(replace_na(val_sum, 0))),
+        OD_s  = rescale01(n_od_pairs),
+        GEO_s = rescale01(n_geos),
+        PAY_s = rescale01(n_pay_methods),
+        DEL_s = rescale01(n_del_methods),
+        PLAT_s = rescale01(pmax(n_platforms, n_groups, na.rm = TRUE))
+      ) %>%
+      mutate(
+        A = 30 * pmin(1, (1.0 * p_cites_I) + (0.5 * p_cites_II) + (0.33 * any_coi)),
+        B = 25 * ((0.6 * R_s) + (0.4 * Q_s)),
+        C = 15 * V_s,
+        D = 20 * pmin(1, (0.4 * any_int) + (0.3 * OD_s) + (0.3 * GEO_s)),
+        E = 10 * pmin(1, (0.4 * has_contact_any) + (0.2 * PAY_s) + (0.2 * DEL_s) + (0.2 * PLAT_s)),
+        risk_raw   = A + B + C + D + E,
+        risk_base  = pmin(pmax(risk_raw * (0.6 + 0.4 * conf), 0), 100)
+      )
+
+    # dataset-relative stretch into 0–100
+    rb <- seller_sum$risk_base
+    rb <- rb[is.finite(rb)]
+    if (length(rb) >= 5) {
+      q_lo <- as.numeric(stats::quantile(rb, probs = 0.05, na.rm = TRUE, names = FALSE))
+      q_hi <- as.numeric(stats::quantile(rb, probs = 0.98, na.rm = TRUE, names = FALSE))
+      if (is.finite(q_lo) && is.finite(q_hi) && q_hi > q_lo) {
+        seller_sum <- seller_sum %>%
+          mutate(
+            risk_score = pmin(pmax(((risk_base - q_lo) / (q_hi - q_lo)) * 100, 0), 100)
+          )
+      } else {
+        seller_sum <- seller_sum %>% mutate(risk_score = risk_base)
+      }
+    } else {
+      seller_sum <- seller_sum %>% mutate(risk_score = risk_base)
+    }
+
+    seller_sum %>%
+      transmute(
+        item_seller_name,
+        risk_score = risk_score,
+        confidence = conf,
+        n_records
+      )
+  }
+
+  # ------------------------------------------
+  # NEW: risk -> neon blue scale (dark→bright)
+  # lower risk = darker blue, higher = bright cyan
+  # ------------------------------------------
+  risk_to_color <- function(risk_vec) {
+    r <- suppressWarnings(as.numeric(risk_vec))
+    r[is.na(r)] <- 0
+    r <- pmin(pmax(r, 0), 100) / 100
+
+    hex_to_rgb <- function(h) {
+      h <- gsub("#", "", h)
+      c(
+        r = strtoi(substr(h, 1, 2), 16L),
+        g = strtoi(substr(h, 3, 4), 16L),
+        b = strtoi(substr(h, 5, 6), 16L)
+      )
+    }
+    rgb_to_hex <- function(rr, gg, bb) sprintf("#%02X%02X%02X", rr, gg, bb)
+
+    # dark navy -> royal blue -> neon cyan
+    c1 <- hex_to_rgb("#041424")  # very dark
+    c2 <- hex_to_rgb("#0050B3")  # mid
+    c3 <- hex_to_rgb("#00F5FF")  # bright
+
+    out <- character(length(r))
+    for (i in seq_along(r)) {
+      t <- r[i]
+      if (t <= 0.5) {
+        u <- t / 0.5
+        rr <- round(c1["r"] + u * (c2["r"] - c1["r"]))
+        gg <- round(c1["g"] + u * (c2["g"] - c1["g"]))
+        bb <- round(c1["b"] + u * (c2["b"] - c1["b"]))
+      } else {
+        u <- (t - 0.5) / 0.5
+        rr <- round(c2["r"] + u * (c3["r"] - c2["r"]))
+        gg <- round(c2["g"] + u * (c3["g"] - c2["g"]))
+        bb <- round(c2["b"] + u * (c3["b"] - c2["b"]))
+      }
+      out[i] <- rgb_to_hex(rr, gg, bb)
+    }
+    out
+  }
+
+  # ------------------------------------------
+  # Build edge table (hub -> seller)
+  # ------------------------------------------
+  if (mode == "platform") {
+
+    validate(need(all(c("platform_name", "item_seller_name") %in% names(dat)),
+                  "platform_name or item_seller_name missing."))
+
+    edat <- dat %>%
+      filter(!is.na(platform_name), platform_name != "",
+             !is.na(item_seller_name), item_seller_name != "") %>%
+      group_by(platform_name, item_seller_name) %>%
+      summarise(records = n(), .groups = "drop")
+
+    hub_var  <- "platform_name"
+    hub_type <- "platform"
+
+  } else if (mode == "group") {
+
+    validate(need(all(c("group_name", "item_seller_name") %in% names(dat)),
+                  "group_name or item_seller_name missing."))
+
+    edat <- dat %>%
+      filter(!is.na(group_name), group_name != "",
+             !is.na(item_seller_name), item_seller_name != "") %>%
+      group_by(group_name, item_seller_name) %>%
+      summarise(records = n(), .groups = "drop")
+
+    hub_var  <- "group_name"
+    hub_type <- "group"
+
+  } else if (mode == "level1") {
+
+    validate(need(all(c("location_level0", "location_level1", "item_seller_name") %in% names(dat)),
+                  "location_level0/location_level1 or item_seller_name missing."))
+
+    edat <- dat %>%
+      mutate(
+        level1_key = paste0(
+          ifelse(is.na(location_level0) | location_level0 == "", "UnknownCountry", as.character(location_level0)),
+          " | ",
+          ifelse(is.na(location_level1) | location_level1 == "", "UnknownL1", as.character(location_level1))
+        )
+      ) %>%
+      filter(!is.na(level1_key), level1_key != "",
+             !is.na(item_seller_name), item_seller_name != "") %>%
+      group_by(level1_key, item_seller_name) %>%
+      summarise(records = n(), .groups = "drop")
+
+    hub_var  <- "level1_key"
+    hub_type <- "level1"
+
+  } else {
+    validate(need(FALSE, "Unknown network mode."))
+  }
+
+  # ------------------------------------------
+  # Seller totals + min record filter
+  # ------------------------------------------
+  seller_totals <- edat %>%
+    group_by(item_seller_name) %>%
+    summarise(total_records = sum(records), .groups = "drop") %>%
+    filter(total_records >= min_rec)
+
+  edat <- edat %>%
+    inner_join(seller_totals, by = "item_seller_name")
+
+  validate(need(nrow(edat) > 0, "No sellers meet minimum record threshold."))
+
+  # ------------------------------------------
+  # Compute seller risk within current filters
+  # ------------------------------------------
+  seller_risk <- compute_seller_risk(dat) %>%
+    inner_join(seller_totals, by = "item_seller_name") %>%
+    mutate(
+      risk_score = ifelse(is.na(risk_score), 0, risk_score),
+      confidence = ifelse(is.na(confidence), 0, confidence),
+      risk_color = risk_to_color(risk_score)
+    )
+
+  # ------------------------------------------
+  # Nodes (gold hubs + blue-risk sellers)
+  # ------------------------------------------
+  hubs <- edat %>%
+    group_by(.data[[hub_var]]) %>%
+    summarise(total_records = sum(records), .groups = "drop") %>%
+    mutate(
+      id    = paste0(hub_type, ":", .data[[hub_var]]),
+      label = .data[[hub_var]],
+      group = "Hub",
+      value = total_records,
+      risk_score = NA_real_,
+      confidence = NA_real_,
+      risk_color = NA_character_
+    )
+
+  sellers <- seller_totals %>%
+    left_join(
+      seller_risk %>% select(item_seller_name, risk_score, confidence, risk_color),
+      by = "item_seller_name"
+    ) %>%
+    mutate(
+      id    = paste0("seller:", item_seller_name),
+      label = item_seller_name,
+      group = "Seller",
+      value = total_records,
+      risk_score = ifelse(is.na(risk_score), 0, risk_score),
+      confidence = ifelse(is.na(confidence), 0, confidence),
+      risk_color = ifelse(is.na(risk_color), "#041424", risk_color)  # safe very-dark default
+    )
+
+  nodes <- bind_rows(hubs, sellers) %>%
+    mutate(
+      title = ifelse(
+        group == "Hub",
+        paste0(
+          "<div style='background:#000; color:#FFD24D; padding:8px; border-radius:6px;'>",
+          "<b>", htmltools::htmlEscape(label), "</b><br/>",
+          "Records: ", value,
+          "</div>"
+        ),
+        paste0(
+          "<div style='background:#000; color:#00F5FF; padding:8px; border-radius:6px;'>",
+          "<b>", htmltools::htmlEscape(label), "</b><br/>",
+          "Records: ", value, "<br/>",
+          "Risk score: <b>", round(risk_score, 1), "</b> / 100",
+          "</div>"
+        )
+      ),
+      # GOLDEN, GLOWY HUBS
+      color.background = ifelse(
+        group == "Hub",
+        "#FFD24D",             # soft gold
+        risk_color             # blue gradient by risk
+      ),
+      color.border = ifelse(
+        group == "Hub",
+        "#FFE794",             # lighter gold edge = glow
+        "#00C9FF"              # cyan edge for sellers
+      ),
+      color.highlight.background = ifelse(
+        group == "Hub",
+        "#FFE066",             # brighter gold on select
+        "#00F5FF"              # neon cyan on select
+      ),
+      color.highlight.border = "#FFFFFF",
+      color.hover.background = ifelse(
+        group == "Hub",
+        "#FFE794",
+        risk_color
+      ),
+      color.hover.border = "#FFFFFF"
+    ) %>%
+    distinct(id, .keep_all = TRUE)
+
+  # Node size scaling
+  if (any(nodes$group == "Seller")) {
+    seller_vals <- nodes$value[nodes$group == "Seller"]
+    if (length(unique(seller_vals[!is.na(seller_vals)])) == 1) {
+      nodes$value[nodes$group == "Seller"] <- 70
+    } else {
+      nodes$value[nodes$group == "Seller"] <- scales::rescale(seller_vals, to = c(30, 100))
+    }
+  }
+  nodes$value[nodes$group == "Hub"] <- 50
+
+  # ------------------------------------------
+  # Edges
+  # ------------------------------------------
+  edges <- edat %>%
+    mutate(
+      from = paste0(hub_type, ":", .data[[hub_var]]),
+      to   = paste0("seller:", item_seller_name)
+    ) %>%
+    transmute(
+      from, to,
+      value = records,
+      title = paste0(
+        "<div style='background:#000; color:#00F5FF; padding:8px; border-radius:6px;'>",
+        records, " records",
+        "</div>"
+      )
+    )
+
+  visNetwork(nodes = nodes, edges = edges, height = "100%") %>%
+    visNodes(
+      scaling = list(min = 10, max = 80),
+      font    = list(color = pal_text),
+      borderWidth = 2,
+      borderWidthSelected = 4
+    ) %>%
+    visEdges(
+      smooth = TRUE,
+      color  = list(color = "#00C9FF", highlight = "#39FF14")
+    ) %>%
+    visOptions(
+      highlightNearest = TRUE,
+      nodesIdSelection = TRUE
+    ) %>%
+    visPhysics(stabilization = TRUE) %>%
+    visEvents(
+      select = "function(nodes) { Shiny.onInputChange('net_graph_selected', nodes); }"
+    ) %>%
+    visInteraction(tooltipDelay = 80) %>%
+    visLayout(randomSeed = 123) %>%
+    visConfigure(enabled = FALSE)
+})
+```
+
+Column {.tabset}
+-------------------------------------
+
+### Seller species portfolio
+
+```{r}
+renderDataTable({
+  dat <- get_filtered_data()
+
+  validate(need("item_seller_name" %in% names(dat),
+                "item_seller_name field not found."))
+
+  sel <- input$net_graph_selected
+
+  if (is.null(sel) || is.null(sel$nodes) || length(sel$nodes) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "Select a seller node in the network graph."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  node_id <- sel$nodes[[1]]
+
+  if (!startsWith(node_id, "seller:")) {
+    return(
+      datatable(
+        data.frame(Message = "Select a SELLER node (not a platform/group)."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  seller_name <- sub("^seller:", "", node_id)
+
+  subdat <- dat %>%
+    filter(item_seller_name == seller_name)
+
+  if (nrow(subdat) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "No records for this seller under current filters."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  species_tab <- subdat %>%
+    group_by(item_taxa, item_common_name) %>%
+    summarise(records = n(), .groups = "drop") %>%
+    arrange(desc(records))
+
+  datatable(
+    species_tab,
+    options = list(dom = "t<'dt-bottom'p>", paging = TRUE, searching = FALSE, lengthChange = FALSE, info = FALSE, pageLength = 5, scrollY = "200px"),
+    rownames = FALSE
+  )
+})
+```
+
+### Seller contact & platforms
+
+```{r}
+renderDataTable({
+  dat <- get_filtered_data()
+
+  validate(need("item_seller_name" %in% names(dat),
+                "item_seller_name field not found."))
+
+  sel <- input$net_graph_selected
+
+  if (is.null(sel) || is.null(sel$nodes) || length(sel$nodes) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "Select a seller node in the network graph."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  node_id <- sel$nodes[[1]]
+
+  if (!startsWith(node_id, "seller:")) {
+    return(
+      datatable(
+        data.frame(Message = "Select a SELLER node (not a platform/group)."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  seller_name <- sub("^seller:", "", node_id)
+
+  subdat <- dat %>%
+    filter(item_seller_name == seller_name)
+
+  if (nrow(subdat) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "No records for this seller under current filters."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  # One row per group (and platform) with contact info repeated
+  meta_tab <- subdat %>%
+    mutate(
+      item_seller_contact = if_else(
+        is.na(item_seller_contact) | item_seller_contact == "",
+        "[no contact recorded]",
+        item_seller_contact
+      ),
+      platform_name = if_else(
+        is.na(platform_name) | platform_name == "",
+        "[no platform recorded]",
+        platform_name
+      ),
+      group_name = if_else(
+        is.na(group_name) | group_name == "",
+        "[no group recorded]",
+        group_name
+      )
+    ) %>%
+    distinct(
+      item_seller_name,
+      item_seller_contact,
+      platform_name,
+      group_name
+    ) %>%
+    arrange(platform_name, group_name)
+
+  datatable(
+    meta_tab,
+    options = list(dom = "t<'dt-bottom'p>", paging = TRUE, searching = FALSE, lengthChange = FALSE, info = FALSE, scrollX = TRUE, pageLength = 10),
+    rownames = FALSE
+  )
+})
+```
+
+### Seller location
+
+```{r}
+renderDataTable({
+  dat <- get_filtered_data()
+
+  validate(need("item_seller_name" %in% names(dat),
+                "item_seller_name field not found."))
+
+  # These should exist from core_gms_clean, but check anyway
+  needed_cols <- c(
+    "location_level0",
+    "location_level1",
+    "location_level2",
+    "origin_country",
+    "destination_country"
+  )
+  missing_cols <- setdiff(needed_cols, names(dat))
+  validate(need(length(missing_cols) == 0,
+                paste("Missing required field(s):",
+                      paste(missing_cols, collapse = ", "))))
+
+  sel <- input$net_graph_selected
+
+  if (is.null(sel) || is.null(sel$nodes) || length(sel$nodes) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "Select a seller node in the network graph."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  node_id <- sel$nodes[[1]]
+
+  if (!startsWith(node_id, "seller:")) {
+    return(
+      datatable(
+        data.frame(Message = "Select a SELLER node (not a platform or group)."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  seller_name <- sub("^seller:", "", node_id)
+
+  subdat <- dat %>%
+    filter(item_seller_name == seller_name)
+
+  if (nrow(subdat) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "No records for this seller under current filters."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  # If ALL location + OD fields are missing/empty, bail out cleanly
+  if (all(
+    (is.na(subdat$location_level0) | subdat$location_level0 == "") &
+      (is.na(subdat$location_level1) | subdat$location_level1 == "") &
+      (is.na(subdat$location_level2) | subdat$location_level2 == "") &
+      (is.na(subdat$origin_country) | subdat$origin_country == "") &
+      (is.na(subdat$destination_country) | subdat$destination_country == "")
+  )) {
+    return(
+      datatable(
+        data.frame(Message = "No location records for this seller."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  # Clean and summarise unique location combos and OD flows
+  loc_tab <- subdat %>%
+    mutate(
+      location_level0 = if_else(
+        is.na(location_level0) | location_level0 == "",
+        "[not recorded]", location_level0
+      ),
+      location_level1 = if_else(
+        is.na(location_level1) | location_level1 == "",
+        "[not recorded]", location_level1
+      ),
+      location_level2 = if_else(
+        is.na(location_level2) | location_level2 == "",
+        "[not recorded]", location_level2
+      ),
+      origin_country = if_else(
+        is.na(origin_country) | origin_country == "",
+        "[not recorded]", origin_country
+      ),
+      destination_country = if_else(
+        is.na(destination_country) | destination_country == "",
+        "[not recorded]", destination_country
+      )
+    ) %>%
+    group_by(
+      location_level0,
+      location_level1,
+      location_level2,
+      origin_country,
+      destination_country
+    ) %>%
+    summarise(
+      records = n(),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(records))
+
+  # Extra safety: if grouping somehow yields no rows, show message instead of error
+  if (nrow(loc_tab) == 0 || ncol(loc_tab) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "No location records for this seller."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  # Rename columns clearly (keep record count as last column)
+  colnames(loc_tab) <- c(
+    "Country",
+    "State/Province",
+    "District/Locality",
+    "Seller Origin",
+    "Product Destination",
+    "Records"
+  )
+
+  datatable(
+    loc_tab,
+    options = list(dom = "t<'dt-bottom'p>", paging = TRUE, searching = FALSE, lengthChange = FALSE, info = FALSE, scrollX = TRUE, pageLength = 10),
+    rownames = FALSE
+  )
+})
+```
+
+### Seller financials
+
+```{r}
+renderDataTable({
+  dat <- get_filtered_data()
+
+  validate(need("item_seller_name" %in% names(dat),
+                "item_seller_name field not found."))
+
+  # Required financial fields
+  needed_cols <- c(
+    "item_common_name",
+    "item_count",
+    "item_unit",
+    "item_price",
+    "item_currency"
+  )
+  missing_cols <- setdiff(needed_cols, names(dat))
+  validate(need(length(missing_cols) == 0,
+                paste("Missing required field(s):",
+                      paste(missing_cols, collapse = ", "))))
+
+  sel <- input$net_graph_selected
+
+  if (is.null(sel) || is.null(sel$nodes) || length(sel$nodes) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "Select a seller node in the network graph."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  node_id <- sel$nodes[[1]]
+
+  if (!startsWith(node_id, "seller:")) {
+    return(
+      datatable(
+        data.frame(Message = "Select a SELLER node (not a platform or group)."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  seller_name <- sub("^seller:", "", node_id)
+
+  subdat <- dat %>%
+    filter(item_seller_name == seller_name)
+
+  if (nrow(subdat) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "No records for this seller under current filters."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  # If all financial fields are missing/empty, bail out cleanly
+  if (all(
+    (is.na(subdat$item_common_name) | subdat$item_common_name == "") &
+      (is.na(subdat$item_count)      | subdat$item_count == "") &
+      (is.na(subdat$item_unit)       | subdat$item_unit == "") &
+      (is.na(subdat$item_price)      | subdat$item_price == "") &
+      (is.na(subdat$item_currency)   | subdat$item_currency == "")
+  )) {
+    return(
+      datatable(
+        data.frame(Message = "No financial records for this seller."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  fin_tab <- subdat %>%
+    mutate(
+      item_common_name = if_else(
+        is.na(item_common_name) | item_common_name == "",
+        "[not recorded]", item_common_name
+      ),
+      item_unit = if_else(
+        is.na(item_unit) | item_unit == "",
+        "[not recorded]", item_unit
+      ),
+      item_currency = if_else(
+        is.na(item_currency) | item_currency == "",
+        "[not recorded]", item_currency
+      ),
+      item_count = suppressWarnings(as.numeric(item_count)),
+      item_price = suppressWarnings(as.numeric(item_price))
+    ) %>%
+    group_by(item_common_name, item_unit, item_currency) %>%
+    summarise(
+      Records        = dplyr::n(),
+      Total_quantity = if (all(is.na(item_count))) NA_real_ else sum(item_count, na.rm = TRUE),
+      Total_price    = if (all(is.na(item_price))) NA_real_ else sum(item_price, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  # Add currency-level total rows
+  if (nrow(fin_tab) > 0) {
+    total_by_cur <- fin_tab %>%
+      group_by(item_currency) %>%
+      summarise(
+        Records        = sum(Records, na.rm = TRUE),
+        Total_quantity = sum(Total_quantity, na.rm = TRUE),
+        Total_price    = sum(Total_price, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        item_common_name = "TOTAL",
+        item_unit        = ""
+      ) %>%
+      select(
+        item_common_name,
+        item_unit,
+        item_currency,
+        Records,
+        Total_quantity,
+        Total_price
+      )
+
+    fin_tab <- fin_tab %>%
+      arrange(desc(Total_price), desc(Total_quantity), desc(Records)) %>%
+      bind_rows(total_by_cur)
+  }
+
+  if (nrow(fin_tab) == 0 || ncol(fin_tab) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "No financial records for this seller."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  colnames(fin_tab)[1:3] <- c("Species", "Unit", "Currency")
+
+  datatable(
+    fin_tab,
+    options = list(dom = "t<'dt-bottom'p>", paging = TRUE, searching = FALSE, lengthChange = FALSE, info = FALSE, scrollX = TRUE, pageLength = 10),
+    rownames = FALSE
+  )
+})
+```
+
+
+Financial Analysis {data-icon="fa-dollar-sign"}
+=====================================
+
+Row {data-height=120}
+-------------------------------------
+
+### FX conversion controls
+
+```{r}
+numericInput(
+  "fx_rate",
+  "Conversion factor (e.g. THB → EUR)",
+  value = 1,
+  min   = 0,
+  step  = 0.01
+)
+
+textInput(
+  "fx_currency_label",
+  "Converted currency label (e.g. EUR, USD)",
+  value = ""
+)
+
+actionButton("apply_conversion", "Apply conversion")
+```
+
+Row {.tabset data-height=650}
+-------------------------------------
+
+### Species price profile
+
+```{r}
+renderPlotly({
+  dat <- get_filtered_data()
+
+  # Check for required fields
+  validate(need(all(c("item_common_name", "item_price", "item_currency") %in% names(dat)),
+                "item_common_name, item_price, or item_currency field not found."))
+
+  # Keep rows with price info
+  sub <- dat %>%
+    filter(
+      !is.na(item_common_name), item_common_name != "",
+      !is.na(item_price), item_price != ""
+    )
+
+  validate(need(nrow(sub) > 0,
+                "No price data available under current filters."))
+
+  price_summ <- sub %>%
+    mutate(
+      item_price = suppressWarnings(as.numeric(item_price)),
+      item_currency = if_else(
+        is.na(item_currency) | item_currency == "",
+        "[not recorded]",
+        item_currency
+      )
+    ) %>%
+    filter(!is.na(item_price)) %>%
+    group_by(item_common_name, item_currency) %>%
+    summarise(
+      price_min  = min(item_price, na.rm = TRUE),
+      price_max  = max(item_price, na.rm = TRUE),
+      price_mean = mean(item_price, na.rm = TRUE),
+      n_records  = dplyr::n(),
+      .groups    = "drop"
+    )
+
+  validate(need(nrow(price_summ) > 0,
+                "No usable numeric price data for these records."))
+
+  # APPLY FX CONVERSION IF SET
+  fx <- fx_settings()
+  if (!is.null(fx)) {
+    rate  <- fx$rate
+    label <- fx$label
+    price_summ <- price_summ %>%
+      mutate(
+        price_min    = price_min  * rate,
+        price_max    = price_max  * rate,
+        price_mean   = price_mean * rate,
+        item_currency = label
+      )
+  }
+
+  # Label species by currency so we do not mix units
+  price_summ <- price_summ %>%
+    mutate(
+      Species = paste0(item_common_name, " [", item_currency, "]")
+    ) %>%
+    arrange(desc(price_mean))
+
+  price_summ$Species <- factor(
+    price_summ$Species,
+    levels = rev(unique(price_summ$Species))
+  )
+
+  # Base object
+  p <- price_summ %>%
+    plot_ly()
+
+  # Horizontal min–max segments per species (no zig-zagging)
+  p <- p %>%
+    add_segments(
+      x    = ~price_min,
+      xend = ~price_max,
+      y    = ~Species,
+      yend = ~Species,
+      line = list(color = "#00C9FF", width = 5),
+      hoverinfo  = "none",
+      showlegend = FALSE
+    )
+
+  # Outer glow markers (bigger)
+  p <- p %>%
+    add_markers(
+      x    = ~price_mean,
+      y    = ~Species,
+      marker = list(
+        size    = 24,
+        color   = "#00F5FF",
+        opacity = 0.4
+      ),
+      hoverinfo  = "skip",
+      showlegend = FALSE
+    )
+
+  # Inner core markers (main hover)
+  p <- p %>%
+    add_markers(
+      x    = ~price_mean,
+      y    = ~Species,
+      marker = list(
+        size    = 12,
+        color   = "#00BFFF",
+        opacity = 0.95,
+        line    = list(width = 2, color = "#E8F4FF")
+      ),
+      text = ~paste0(
+        "<b>", Species, "</b><br>",
+        "Min: ", signif(price_min, 3), "<br>",
+        "Mean: ", signif(price_mean, 3), "<br>",
+        "Max: ", signif(price_max, 3), "<br>",
+        "Records: ", n_records
+      ),
+      hoverinfo  = "text",
+      showlegend = FALSE
+    )
+
+  x_title <- if (!is.null(fx)) {
+    paste0("Average recorded price (", fx$label, ")")
+  } else {
+    "Average recorded price"
+  }
+
+  p %>%
+    layout(
+      title = list(
+        text = if (!is.null(fx)) {
+          paste0("Average price by species (", fx$label, ")")
+        } else {
+          "Average price by species"
+        },
+        x = 0
+      ),
+      xaxis = list(
+        title = x_title
+      ),
+      yaxis = list(
+        title = ""
+      ),
+      paper_bgcolor = pal_panel,
+      plot_bgcolor  = pal_panel,
+      font = list(color = pal_text),
+      margin = list(l = 220, r = 40, t = 60, b = 60)
+    )
+})
+```
+
+### Price per unit
+
+```{r}
+# ---- Styling for the unit cards ----
+htmltools::tags$style(HTML("
+  .ppu-wrap{
+    width:100%;
+    background: transparent;
+  }
+  .ppu-topbar{
+    display:flex;
+    align-items:flex-end;
+    gap:12px;
+    flex-wrap:wrap;
+    margin-bottom:10px;
+  }
+  .ppu-topbar .form-group{ margin-bottom:0 !important; }
+  .ppu-topbar label.control-label{
+    color:#00F5FF !important;
+    font-weight:800 !important;
+  }
+  .ppu-grid{
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap:12px;
+    width:100%;
+  }
+  .ppu-card{
+    background:#0B0F14;
+    border:1px solid #00C9FF;
+    border-radius:14px;
+    padding:12px 12px 10px 12px;
+    box-shadow: 0 0 14px rgba(0,245,255,0.10);
+    min-height:128px;
+  }
+  .ppu-card-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    margin-bottom:8px;
+  }
+  .ppu-unit{
+    color:#00F5FF;
+    font-weight:900;
+    font-size:14px;
+    letter-spacing:0.2px;
+  }
+  .ppu-icon{
+    color:#39FF14;
+    opacity:0.9;
+    font-size:18px;
+  }
+  .ppu-metric{
+    color:#E6F7FF;
+    font-size:13px;
+    line-height:1.25;
+  }
+  .ppu-metric b{ color:#FFFFFF; }
+  .ppu-sub{
+    color:#CFEFFF;
+    font-size:12px;
+    opacity:0.95;
+    margin-top:6px;
+  }
+  .ppu-empty{
+    color:#6FA9B8;
+    font-size:12px;
+  }
+"))
+
+# ---- Canonical unit mapping (robust to small variants) ----
+canonical_unit <- function(x) {
+  x <- tolower(trimws(as.character(x)))
+  x[x %in% c("", "na", "nan", "n/a")] <- NA_character_
+
+  out <- rep(NA_character_, length(x))
+
+  # individual
+  out[grepl("^ind", x) | grepl("individual", x) | grepl("\\bunit\\b", x)] <- "Individual"
+  # kg
+  out[grepl("\\bkg\\b", x) | grepl("kilo", x) | grepl("kilogram", x)] <- "Kilograms"
+  # piece
+  out[grepl("piece", x) | grepl("\\bpcs\\b", x) | grepl("\\bpc\\b", x)] <- "Piece"
+  # pair
+  out[grepl("pair", x) | grepl("\\bpr\\b", x)] <- "Pair"
+  # eggs
+  out[grepl("egg", x) | grepl("eggs", x)] <- "Eggs"
+  # meters
+  out[grepl("\\bm\\b", x) | grepl("meter", x) | grepl("metre", x)] <- "Meters"
+  # consignment
+  out[grepl("consign", x) | grepl("lot", x) | grepl("bulk", x) | grepl("shipment", x)] <- "Consignment"
+  # litres
+  out[grepl("\\bl\\b", x) | grepl("litre", x) | grepl("liter", x)] <- "Litres"
+  # millilitres
+  out[grepl("\\bml\\b", x) | grepl("millil", x)] <- "Mililitres"
+
+  # If still NA, keep cleaned original as fallback (so you can see unexpected units)
+  out[is.na(out) & !is.na(x)] <- stringr::str_to_sentence(x[is.na(out) & !is.na(x)])
+
+  out
+}
+
+# ---- Units to display (fixed set requested) ----
+ppu_units <- c(
+  "Individual", "Kilograms", "Piece", "Pair", "Eggs",
+  "Meters", "Consignment", "Litres", "Mililitres"
+)
+
+ppu_unit_meta <- tibble::tibble(
+  unit = ppu_units,
+  icon = c(
+    "user",          # Individual
+    "weight-hanging",# Kilograms
+    "cube",          # Piece
+    "shoe-prints",   # Pair
+    "egg",           # Eggs
+    "ruler-horizontal", # Meters
+    "boxes-packing", # Consignment
+    "tint",          # Litres
+    "vial"           # Mililitres
+  )
+)
+
+# ---- UI shell: dropdown + output area ----
+htmltools::div(
+  class = "ppu-wrap",
+  htmltools::div(
+    class = "ppu-topbar",
+    selectInput(
+      "ppu_species",
+      "Select species (item_common_name)",
+      choices = "",
+      selected = NULL,
+      width = "520px"
+    )
+  ),
+  uiOutput("ppu_cards")
+)
+
+# ---- Populate dropdown choices whenever filters change ----
+observe({
+  dat <- get_filtered_data()
+  if (!("item_common_name" %in% names(dat))) return(NULL)
+
+  sp <- dat %>%
+    dplyr::filter(!is.na(item_common_name), item_common_name != "") %>%
+    dplyr::distinct(item_common_name) %>%
+    dplyr::arrange(item_common_name) %>%
+    dplyr::pull(item_common_name)
+
+  if (length(sp) == 0) sp <- character(0)
+
+  # Keep current selection if still valid
+  current <- isolate(input$ppu_species)
+  selected <- if (!is.null(current) && current %in% sp) current else if (length(sp) > 0) sp[[1]] else NULL
+
+  updateSelectInput(session, "ppu_species", choices = sp, selected = selected)
+})
+
+# ---- Render cards based on selected species ----
+output$ppu_cards <- renderUI({
+  dat <- get_filtered_data()
+
+  validate(need(all(c("item_common_name", "item_price", "item_count", "item_unit", "item_currency") %in% names(dat)),
+                "Required fields not found: item_common_name, item_price, item_count, item_unit, item_currency."))
+
+  sp_sel <- input$ppu_species
+  validate(need(!is.null(sp_sel) && sp_sel != "", "Select a species to view price-per-unit summary."))
+
+  # Filter to valid PPU rows
+  unit_dat <- dat %>%
+    dplyr::filter(
+      !is.na(item_common_name), item_common_name != "",
+      item_common_name == sp_sel,
+      !is.na(item_unit), item_unit != "",
+      !is.na(item_currency), item_currency != "",
+      !is.na(item_price), item_price != "",
+      !is.na(item_count), item_count != ""
+    ) %>%
+    dplyr::mutate(
+      item_price = suppressWarnings(as.numeric(item_price)),
+      item_count = suppressWarnings(as.numeric(item_count)),
+      unit_std   = canonical_unit(item_unit)
+    ) %>%
+    dplyr::filter(
+      is.finite(item_price), item_price > 0,
+      is.finite(item_count), item_count > 0,
+      !is.na(unit_std), unit_std != ""
+    ) %>%
+    dplyr::mutate(price_per_unit = item_price / item_count)
+
+  # Apply FX conversion if set (same behavior as your other finance widgets)
+  fx <- fx_settings()
+  if (!is.null(fx) && nrow(unit_dat) > 0) {
+    unit_dat <- unit_dat %>%
+      dplyr::mutate(
+        price_per_unit = price_per_unit * fx$rate,
+        item_currency  = fx$label
+      )
+  }
+
+  if (nrow(unit_dat) == 0) {
+    return(htmltools::div(
+      class = "ppu-empty",
+      "No valid price-per-unit records for this species under current filters (needs price, count, unit, currency)."
+    ))
+  }
+
+  # Summarise per unit and currency (don’t mix currencies unless FX has been applied)
+  summ <- unit_dat %>%
+    dplyr::filter(unit_std %in% ppu_units) %>%
+    dplyr::group_by(unit_std, item_currency) %>%
+    dplyr::summarise(
+      n_records = dplyr::n(),
+      avg_ppu   = mean(price_per_unit, na.rm = TRUE),
+      min_ppu   = min(price_per_unit, na.rm = TRUE),
+      max_ppu   = max(price_per_unit, na.rm = TRUE),
+      .groups   = "drop"
+    )
+
+  # Helper formatter
+  fmt_num <- function(x) {
+    ifelse(is.na(x) | !is.finite(x), "—", format(round(x, 2), big.mark = ",", scientific = FALSE, trim = TRUE))
+  }
+
+  # Build cards for every unit (even if missing)
+  cards <- lapply(seq_len(nrow(ppu_unit_meta)), function(i) {
+    u <- ppu_unit_meta$unit[[i]]
+    ic <- ppu_unit_meta$icon[[i]]
+
+    urows <- summ %>% dplyr::filter(unit_std == u)
+
+    if (nrow(urows) == 0) {
+      return(
+        htmltools::div(
+          class = "ppu-card",
+          htmltools::div(
+            class = "ppu-card-head",
+            htmltools::div(class = "ppu-unit", u),
+            htmltools::div(class = "ppu-icon", icon(ic))
+          ),
+          htmltools::div(class = "ppu-empty", "No data for this unit")
+        )
+      )
+    }
+
+    # If multiple currencies (when FX not applied), show compact stacked lines
+    lines <- lapply(seq_len(nrow(urows)), function(j) {
+      cur <- urows$item_currency[[j]]
+      htmltools::div(
+        class = "ppu-metric",
+        htmltools::tags$b(paste0(cur, ": ")), fmt_num(urows$avg_ppu[[j]]),
+        htmltools::div(
+          class = "ppu-sub",
+          "Range: ", fmt_num(urows$min_ppu[[j]]), " → ", fmt_num(urows$max_ppu[[j]]),
+          " | Records: ", urows$n_records[[j]]
+        )
+      )
+    })
+
+    htmltools::div(
+      class = "ppu-card",
+      htmltools::div(
+        class = "ppu-card-head",
+        htmltools::div(class = "ppu-unit", u),
+        htmltools::div(class = "ppu-icon", icon(ic))
+      ),
+      htmltools::tagList(lines)
+    )
+  })
+
+  htmltools::div(class = "ppu-grid", htmltools::tagList(cards))
+})
+```
+
+Save & Export {data-icon="save"}
+=====================================
+
+Row {data-height=500}
+-------------------------------------
+
+```{r}
+# UI for Save & Export tab
+
+div(
+  style = "max-height: 600px; overflow-y: auto; padding-right: 10px;",
+
+  # ==== SECTION 0: UPLOAD PROJECT (.RDS) ====================================
+  div(
+    style = "border-top: 2px solid #00F5FF; padding-top: 15px; margin-bottom: 20px;",
+    tags$h3(
+      style = "color:#00F5FF; font-weight:600; margin-bottom:5px;",
+      HTML("<i class='fa fa-upload'></i> Upload project (.rds)")
+    ),
+    tags$p(
+      style = "color:#CCCCCC;",
+      "Load a previously saved project (.rds) to restore the processed data and geocoding cache without re-processing everything."
+    ),
+    fileInput(
+      "upload_project_rds",
+      label = NULL,
+      accept = ".rds",
+      buttonLabel = "Browse…",
+      placeholder = "Choose a saved project .rds file"
+    ),
+    actionButton(
+      "btn_load_project",
+      "Load project",
+      class = "btn btn-success",
+      icon = icon("play")
+    ),
+    div(style = "margin-top:8px;",
+        uiOutput("upload_project_status"))
+  ),
+
+  # ==== SECTION 1: SAVE PROGRESS (.RDS) ====================================
+  div(
+    style = "border-top: 2px solid #00F5FF; padding-top: 15px; margin-bottom: 20px;",
+    tags$h3(
+      style = "color:#00F5FF; font-weight:600; margin-bottom:5px;",
+      HTML("<i class='fa fa-save'></i> Save progress (.rds)")
+    ),
+    tags$p(
+      style = "color:#CCCCCC;",
+      "Download an .rds snapshot of the current filtered data and geocoded cache so you can reload this session quickly later."
+    ),
+    downloadButton(
+      "dl_state_rds",
+      "Download current state (.rds)",
+      class = "btn btn-primary"
+    )
+  ),
+
+  # ==== SECTION 2: EXPORT KEY TABLES =======================================
+  div(
+    style = "border-top: 2px solid #00F5FF; padding-top: 15px; margin-bottom: 20px;",
+    tags$h3(
+      style = "color:#00F5FF; font-weight:600; margin-bottom:5px;",
+      HTML("<i class='fa fa-table'></i> Export key tables")
+    ),
+    tags$p(
+      style = "color:#CCCCCC;",
+      "Export the current filtered dataset and a seller-level summary as Excel-friendly CSV files (UTF-8 with BOM for correct Unicode)."
+    ),
+    div(
+      style = "display:flex; flex-wrap:wrap; gap:10px; margin-top:5px;",
+      downloadButton(
+        "dl_filtered_csv",
+        "Filtered data (.csv)",
+        class = "btn btn-secondary"
+      ),
+      downloadButton(
+        "dl_seller_summary_csv",
+        "Seller summary (.csv)",
+        class = "btn btn-secondary"
+      )
+    )
+  ),
+
+  # ==== SECTION 3: EXPORT GEOCODED DATA ===================================
+  div(
+    style = "border-top: 2px solid #00F5FF; padding-top: 15px; margin-bottom: 20px;",
+    tags$h3(
+      style = "color:#00F5FF; font-weight:600; margin-bottom:5px;",
+      HTML("<i class='fa fa-map-marker'></i> Export geocoded data")
+    ),
+    tags$p(
+      style = "color:#CCCCCC;",
+      "Export all Level 0–2 geocoded points from the cache, ready for GIS workflows."
+    ),
+    div(
+      style = "display:flex; flex-wrap:wrap; gap:10px; margin-top:5px;",
+      downloadButton(
+        "dl_geo_csv",
+        "Geocoded points (.csv)",
+        class = "btn btn-info"
+      ),
+      downloadButton(
+        "dl_geo_shp",
+        "Geocoded points (ESRI Shapefile .zip)",
+        class = "btn btn-info"
+      )
+    )
+  )
+)
+```
+
+```{r save_export_server, echo=FALSE}
+# SERVER LOGIC FOR SAVE & EXPORT TAB
+# Requires: dplyr, sf, zip, shiny; get_filtered_data(), geo_points_cache() already defined earlier.
+
+# -------------------------------------------------------------------
+# 0. PROJECT STATE OVERRIDE: make get_filtered_data() use uploaded RDS
+# -------------------------------------------------------------------
+
+uploaded_project <- reactiveVal(NULL)
+
+# Keep a handle on the original get_filtered_data reactive
+original_get_filtered_data <- get_filtered_data
+
+# Override get_filtered_data so the entire dashboard uses the uploaded
+# filtered_data when a project is loaded; otherwise fall back.
+get_filtered_data <- reactive({
+  proj <- uploaded_project()
+  if (!is.null(proj) && !is.null(proj$filtered_data)) {
+    proj$filtered_data
+  } else {
+    original_get_filtered_data()
+  }
+})
+
+output$upload_project_status <- renderUI({
+  proj <- uploaded_project()
+  if (is.null(proj)) {
+    tags$span(style = "color:#888888; font-size:12px;",
+              "No project loaded yet.")
+  } else {
+    n_fd <- if (!is.null(proj$filtered_data)) nrow(proj$filtered_data) else NA_integer_
+    tags$span(
+      style = "color:#00F5FF; font-size:12px;",
+      paste0("Project loaded. Filtered rows: ",
+             ifelse(is.na(n_fd), "n/a", format(n_fd, big.mark = ",")),
+             "; geocoded cache restored."
+      )
+    )
+  }
+})
+
+observeEvent(input$btn_load_project, {
+  req(input$upload_project_rds)
+
+  tryCatch({
+    obj <- readRDS(input$upload_project_rds$datapath)
+
+    if (!is.list(obj)) stop("RDS does not contain a named list.")
+    if (!("filtered_data" %in% names(obj) || "geo_points" %in% names(obj))) {
+      stop("RDS must contain at least 'filtered_data' or 'geo_points'.")
+    }
+
+    # Restore geocoding cache (this is the heavy part you want to skip redoing)
+    if (!is.null(obj$geo_points)) {
+      geo_points_cache(obj$geo_points)
+    }
+
+    # Store into override; from now on get_filtered_data() will serve this
+    uploaded_project(obj)
+
+    # NEW: initialise sidebar filters and calendar from the loaded filtered_data
+    if (!is.null(obj$filtered_data)) {
+      dat <- obj$filtered_data
+      session <- shiny::getDefaultReactiveDomain()
+
+      if (!is.null(session)) {
+
+        # Date range + calendar year
+        if ("record_date" %in% names(dat) && any(!is.na(dat$record_date))) {
+          updateDateRangeInput(
+            session, "filter_date",
+            start = min(dat$record_date, na.rm = TRUE),
+            end   = max(dat$record_date, na.rm = TRUE)
+          )
+
+          yrs <- sort(unique(lubridate::year(dat$record_date[!is.na(dat$record_date)])))
+          if (length(yrs) > 0) {
+            updateSelectInput(
+              session, "calendar_year",
+              choices  = yrs,
+              selected = max(yrs, na.rm = TRUE)
+            )
+          }
+        }
+
+        # Platforms
+        if ("platform_name" %in% names(dat)) {
+          plats <- sort(unique(dat$platform_name))
+          updateSelectInput(
+            session, "filter_platform",
+            choices  = c("All", plats),
+            selected = "All"
+          )
+        }
+
+        # Taxa
+        if ("item_taxa" %in% names(dat)) {
+          taxa <- sort(unique(dat$item_taxa))
+          updateSelectInput(
+            session, "filter_taxa",
+            choices  = c("All", taxa),
+            selected = "All"
+          )
+        }
+
+        # CITES
+        if ("item_CITES" %in% names(dat)) {
+          cites_levels <- sort(unique(dat$item_CITES))
+          updateSelectInput(
+            session, "filter_cites",
+            choices  = c("All", cites_levels),
+            selected = "All"
+          )
+        }
+
+        # Reset COI & seller filters for the loaded state
+        updateCheckboxInput(session, "filter_coi", value = FALSE)
+        updateCheckboxInput(session, "filter_remove_encrypted", value = FALSE)
+        updateCheckboxInput(session, "filter_remove_anon", value = FALSE)
+
+        # Reset FX conversion on load
+        fx_settings(NULL)
+        updateNumericInput(session, "fx_rate", value = 1)
+        updateTextInput(session, "fx_currency_label", value = "")
+      }
+    }
+
+    showNotification(
+      "Project .rds loaded. Dashboard data, filters, and geocoding cache restored.",
+      type = "message", duration = 4
+    )
+
+  }, error = function(e) {
+    uploaded_project(NULL)
+    showNotification(
+      paste("Error loading project .rds:", e$message),
+      type = "error", duration = 6
+    )
+  })
+})
+
+# ===========================
+# Save progress (.rds)
+# ===========================
+output$dl_state_rds <- downloadHandler(
+  filename = function() {
+    paste0("iwt_dashboard_state_", Sys.Date(), ".rds")
+  },
+  content = function(file) {
+    obj <- list(
+      # This is exactly what will be restored into get_filtered_data()
+      filtered_data = tryCatch(get_filtered_data(), error = function(e) NULL),
+      geo_points    = tryCatch(geo_points_cache(),  error = function(e) NULL)
+    )
+    saveRDS(obj, file = file)
+  }
+)
+
+# ===========================
+# Export key tables (CSV as Excel-friendly UTF-8)
+# ===========================
+
+# 1) Filtered data as CSV
+output$dl_filtered_csv <- downloadHandler(
+  filename = function() {
+    paste0("iwt_filtered_data_", Sys.Date(), ".csv")
+  },
+  content = function(file) {
+    dat <- tryCatch(get_filtered_data(), error = function(e) NULL)
+    if (is.null(dat)) stop("No filtered data available.")
+    utils::write.csv(
+      dat,
+      file,
+      row.names    = FALSE,
+      na           = "",
+      fileEncoding = "UTF-8-BOM"
+    )
+  }
+)
+
+# 2) Seller-level summary as CSV
+output$dl_seller_summary_csv <- downloadHandler(
+  filename = function() {
+    paste0("iwt_seller_summary_", Sys.Date(), ".csv")
+  },
+  content = function(file) {
+    dat <- tryCatch(get_filtered_data(), error = function(e) NULL)
+    if (is.null(dat) || !"item_seller_name" %in% names(dat)) {
+      stop("Seller field 'item_seller_name' not available in filtered data.")
+    }
+
+    summary <- dat %>%
+      dplyr::filter(!is.na(item_seller_name), item_seller_name != "") %>%
+      dplyr::group_by(item_seller_name) %>%
+      dplyr::summarise(
+        n_records   = dplyr::n(),
+        total_items = if ("item_count" %in% names(dat))
+          sum(suppressWarnings(as.numeric(item_count)), na.rm = TRUE) else NA_real_,
+        total_price = if ("item_price" %in% names(dat))
+          sum(suppressWarnings(as.numeric(item_price)), na.rm = TRUE) else NA_real_,
+        .groups = "drop"
+      )
+
+    utils::write.csv(
+      summary,
+      file,
+      row.names    = FALSE,
+      na           = "",
+      fileEncoding = "UTF-8-BOM"
+    )
+  }
+)
+
+# ===========================
+# Export geocoded data
+# ===========================
+
+# Helper to bind l0/l1/l2 with a level tag
+build_geo_points_df <- function(geo) {
+  if (is.null(geo)) return(NULL)
+  if (!all(c("l0", "l1", "l2") %in% names(geo))) return(NULL)
+
+  pts <- dplyr::bind_rows(
+    dplyr::mutate(geo$l0, level = "l0"),
+    dplyr::mutate(geo$l1, level = "l1"),
+    dplyr::mutate(geo$l2, level = "l2")
+  )
+
+  if (!all(c("lon", "lat") %in% names(pts))) {
+    stop("Geocoded points lack 'lon'/'lat' columns.")
+  }
+
+  pts
+}
+
+# 1) CSV export (Excel-friendly UTF-8)
+output$dl_geo_csv <- downloadHandler(
+  filename = function() {
+    paste0("iwt_geocoded_points_", Sys.Date(), ".csv")
+  },
+  content = function(file) {
+    geo <- tryCatch(geo_points_cache(), error = function(e) NULL)
+    if (is.null(geo)) stop("No geocoded data in cache yet.")
+    pts <- build_geo_points_df(geo)
+    if (is.null(pts) || nrow(pts) == 0) stop("No geocoded points available.")
+
+    utils::write.csv(
+      pts,
+      file,
+      row.names    = FALSE,
+      na           = "",
+      fileEncoding = "UTF-8-BOM"
+    )
+  }
+)
+
+# 2) Shapefile export (zipped ESRI Shapefile)
+output$dl_geo_shp <- downloadHandler(
+  filename = function() {
+    paste0("iwt_geocoded_points_", Sys.Date(), ".shp.zip")
+  },
+  content = function(fname) {
+    geo <- tryCatch(geo_points_cache(), error = function(e) NULL)
+    if (is.null(geo)) stop("No geocoded data in cache yet.")
+
+    pts <- build_geo_points_df(geo)
+    if (is.null(pts) || nrow(pts) == 0) stop("No geocoded points available.")
+
+    sf_pts <- sf::st_as_sf(na.omit(pts), coords = c("lon", "lat"), crs = 4326)
+
+    # Work in a temp directory to build the shapefile components cleanly
+    tmpdir <- tempdir()
+    owd <- setwd(tmpdir)
+    on.exit(setwd(owd), add = TRUE)
+
+    # Directory that will contain the shapefile
+    shp_dir  <- "iwt_geocoded_points"
+    dir.create(shp_dir, showWarnings = FALSE)
+
+    # Full path to the .shp inside that directory
+    shp_path <- file.path(shp_dir, "iwt_geocoded_points.shp")
+
+    # Write ESRI Shapefile (creates .shp, .shx, .dbf, .prj, etc. in shp_dir)
+    sf::st_write(
+      sf_pts,
+      dsn        = shp_path,
+      driver     = "ESRI Shapefile",
+      delete_dsn = TRUE,
+      quiet      = TRUE
+    )
+
+    # Collect all files in the shapefile directory (relative paths)
+    shp_files <- file.path(shp_dir, list.files(shp_dir))
+
+    # Zip them into the target filename
+    zip::zipr(
+      zipfile = fname,
+      files   = shp_files,
+      include_directories = TRUE,
+      mode    = "mirror"
+    )
+  }
+)
+```
