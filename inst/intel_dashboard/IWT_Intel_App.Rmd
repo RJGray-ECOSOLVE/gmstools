@@ -674,6 +674,64 @@ get_cites_summary <- function(input_unused = NULL) {
   )
 }
 
+busy_debounce_css <- "<style>
+/* Make the overlay default hidden, and only show when we set busy-stable */
+.busy-overlay{ display:none; }
+html.busy-stable .busy-overlay{ display:flex; }
+</style>"
+
+busy_debounce_js <- paste0(
+  "<script>\n",
+  "(function(){\n",
+  "  var showDelayMs = 400;  // must be busy this long before showing\n",
+  "  var minShowMs   = 800;  // once shown, keep visible at least this long\n",
+  "  var showTimer = null;\n",
+  "  var hideTimer = null;\n",
+  "  var shownAt = 0;\n",
+  "\n",
+  "  function setStable(on){\n",
+  "    if(on) document.documentElement.classList.add('busy-stable');\n",
+  "    else   document.documentElement.classList.remove('busy-stable');\n",
+  "  }\n",
+  "\n",
+  "  function scheduleShow(){\n",
+  "    if(showTimer) return;\n",
+  "    showTimer = setTimeout(function(){\n",
+  "      showTimer = null;\n",
+  "      shownAt = Date.now();\n",
+  "      setStable(true);\n",
+  "    }, showDelayMs);\n",
+  "  }\n",
+  "\n",
+  "  function cancelShow(){\n",
+  "    if(showTimer){ clearTimeout(showTimer); showTimer = null; }\n",
+  "  }\n",
+  "\n",
+  "  function scheduleHide(){\n",
+  "    cancelShow();\n",
+  "    var elapsed = Date.now() - shownAt;\n",
+  "    var wait = Math.max(0, minShowMs - elapsed);\n",
+  "    if(hideTimer) clearTimeout(hideTimer);\n",
+  "    hideTimer = setTimeout(function(){\n",
+  "      hideTimer = null;\n",
+  "      setStable(false);\n",
+  "    }, wait);\n",
+  "  }\n",
+  "\n",
+  "  function handleBusy(isBusy){\n",
+  "    if(isBusy) scheduleShow();\n",
+  "    else scheduleHide();\n",
+  "  }\n",
+  "\n",
+  "  if(window.jQuery){\n",
+  "    $(document).on('shiny:busy', function(){ handleBusy(true);  });\n",
+  "    $(document).on('shiny:idle', function(){ handleBusy(false); });\n",
+  "    $(document).on('shiny:connected', function(){ setStable(false); });\n",
+  "  }\n",
+  "})();\n",
+  "</script>"
+)
+
 # =====================================================
 # geoBoundaries-based geocoding (adm0/adm1/adm2)
 # =====================================================
@@ -1023,21 +1081,18 @@ observeEvent(get_filtered_data(), {
 
 ```{r darkCss, echo=FALSE, results='asis'}
 # Inject CSS into the document
-cat(paste0(dark_css, responsive_css, responsive_js))
+cat(paste0(dark_css, responsive_css, responsive_js, busy_debounce_css, busy_debounce_js))
 ```
 
 ```{r busy_indicator, echo=FALSE}
 # Global animated busy overlay whenever Shiny is working
 div(
   class = "global-busy-indicator",
-  conditionalPanel(
-    condition = "$('html').hasClass('shiny-busy')",
-    div(
-      class = "busy-overlay",
-      div(class = "busy-spinner"),
-      div(class = "busy-text", "Loading..."),
-      div(class = "busy-subtext", "Processing data and updating the dashboard")
-    )
+  div(
+    class = "busy-overlay",
+    div(class = "busy-spinner"),
+    div(class = "busy-text", "Loading..."),
+    div(class = "busy-subtext", "Processing data and updating the dashboard")
   )
 )
 ```
