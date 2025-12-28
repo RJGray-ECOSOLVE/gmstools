@@ -1249,7 +1249,7 @@ actionButton("reset_filters", "Reset filters")
 div(
   style = "margin-top: 12px; font-size: 10px; line-height: 1.2; color: #8fa3c8;",
   HTML(
-    "Version 1.1 (BETA) 2026<br/>",
+    "Version 1.1 (BETA)<br/>",
     "Developed by Russell Gray - Head of Data<br/>",
     "ECOSOLVE | Global Initiative Against Transnational Organized Crime (GI-TOC)"
   )
@@ -1701,23 +1701,41 @@ Row {data-height=200}
 
 ```{r}
 div(
-  style = "display:flex; align-items:center; gap:20px;",
-
+  style = "display:flex; align-items:center; gap:12px; flex-wrap:wrap;",
+  
   radioButtons(
-    "map_metric", "Map metric",
+    "map_metric",
+    NULL,
     choices = c(
-      "Number of records"    = "records",
-      "Total item count"     = "items",
-      "Total recorded price" = "price"
+      "Records"  = "records",
+      "# Items"  = "items",
+      "Financial"      = "price"
     ),
+    selected = "records",
     inline = TRUE
   ),
-
+  
+  radioButtons(
+    "hotspot_view",
+    NULL,
+    choices = c(
+      "Admin"  = "admin",
+      "Species" = "species",
+      "Platforms" = "platform"
+    ),
+    selected = "admin",
+    inline = TRUE
+  ),
+  
   div(
-    style = "min-width:250px; max-width:350px;",
+    style = "min-width:220px; max-width:300px; margin-left:auto;",
     sliderInput(
-      "flow_top_n", "Top OD routes to show",
-      min = 5, max = 50, value = 20, step = 5
+      "flow_top_n",
+      "Top OD",
+      min = 5,
+      max = 50,
+      value = 20,
+      step = 5
     )
   )
 )
@@ -1734,26 +1752,151 @@ renderLeaflet({
 
   dat <- get_filtered_data()
 
-  # No data after filters
   if (nrow(dat) == 0) {
     return(
       leaflet() %>%
         addProviderTiles("CartoDB.DarkMatter") %>%
-        addControl("No data for current filters.",
-                   position = "topright")
+        addControl("No data for current filters.", position = "topright")
     )
   }
 
-  # Use cached geocoded points; do NOT geocode here
   geo <- geo_points_cache()
 
-  # Geocoding still running or not yet done
   if (is.null(geo)) {
     return(
       leaflet() %>%
         addProviderTiles("CartoDB.DarkMatter") %>%
-        addControl("Geocoding locations… please wait.",
-                   position = "topright")
+        addControl("Geocoding locations… please wait.", position = "topright")
+    )
+  }
+
+  view_choice <- input$hotspot_view
+  if (is.null(view_choice) || !view_choice %in% c("admin", "species", "platform")) {
+    view_choice <- "admin"
+  }
+
+  compute_radius <- function(vals) {
+    if (length(vals) == 0 || all(is.na(vals))) return(numeric(0))
+    vals_num <- ifelse(is.na(vals), 0, vals)
+    val_max  <- max(vals_num, na.rm = TRUE)
+    if (val_max <= 0) rep(8, length(vals_num)) else 4 + 16 * (vals_num / val_max)
+  }
+
+  if (view_choice %in% c("species", "platform")) {
+
+    group_field <- if (view_choice == "species") "item_common_name" else "platform_name"
+    group_label <- if (view_choice == "species") "Species" else "Platform"
+
+    base_map <- leaflet() %>%
+      addProviderTiles("CartoDB.DarkMatter")
+
+    if (!(group_field %in% names(dat))) {
+      return(
+        base_map %>%
+          addControl(paste0("Field missing: ", group_field), position = "topright")
+      )
+    }
+
+    coords_l2 <- geo$l2 %>%
+      dplyr::filter(!is.na(lon), !is.na(lat)) %>%
+      dplyr::select(location_level0, location_level1, location_level2, lon, lat)
+
+    coords_l1 <- geo$l1 %>%
+      dplyr::filter(!is.na(lon), !is.na(lat)) %>%
+      dplyr::select(location_level0, location_level1, lon, lat)
+
+    dat_coords <- dat %>%
+      dplyr::mutate(
+        location_level0 = if ("location_level0" %in% names(dat)) as.character(location_level0) else NA_character_,
+        location_level1 = if ("location_level1" %in% names(dat)) as.character(location_level1) else NA_character_,
+        location_level2 = if ("location_level2" %in% names(dat)) as.character(location_level2) else NA_character_,
+        grp = as.character(.data[[group_field]])
+      ) %>%
+      dplyr::filter(!is.na(grp), trimws(grp) != "") %>%
+      dplyr::left_join(
+        coords_l2 %>% dplyr::rename(lon2 = lon, lat2 = lat),
+        by = c("location_level0", "location_level1", "location_level2")
+      ) %>%
+      dplyr::left_join(
+        coords_l1 %>% dplyr::rename(lon1 = lon, lat1 = lat),
+        by = c("location_level0", "location_level1")
+      ) %>%
+      dplyr::mutate(
+        lon = dplyr::coalesce(lon2, lon1),
+        lat = dplyr::coalesce(lat2, lat1),
+        loc_label = dplyr::coalesce(location_level2, location_level1)
+      ) %>%
+      dplyr::filter(!is.na(lon), !is.na(lat), !is.na(loc_label), trimws(loc_label) != "")
+
+    if (nrow(dat_coords) == 0) {
+      return(
+        base_map %>%
+          addControl("No Level 1/2 locations could be matched to processed coordinates.", position = "topright")
+      )
+    }
+
+    pts <- dat_coords %>%
+      dplyr::group_by(grp, lon, lat, loc_label, location_level0) %>%
+      dplyr::summarise(records = dplyr::n(), .groups = "drop")
+
+    pts$radius <- compute_radius(pts$records)
+
+    groups_present <- sort(unique(pts$grp))
+    if (length(groups_present) == 0) {
+      return(
+        base_map %>%
+          addControl("No species/platform values available to display.", position = "topright")
+      )
+    }
+
+    lng_min <- min(pts$lon, na.rm = TRUE)
+    lng_max <- max(pts$lon, na.rm = TRUE)
+    lat_min <- min(pts$lat, na.rm = TRUE)
+    lat_max <- max(pts$lat, na.rm = TRUE)
+
+    map <- base_map %>%
+      addCircleMarkers(
+        data        = pts,
+        lng         = ~lon,
+        lat         = ~lat,
+        radius      = ~radius * 1.8,
+        color       = "#00F5FF",
+        stroke      = TRUE,
+        weight      = 1,
+        fillColor   = "#00F5FF",
+        fillOpacity = 0.15,
+        opacity     = 0.4,
+        group       = ~grp
+      ) %>%
+      addCircleMarkers(
+        data        = pts,
+        lng         = ~lon,
+        lat         = ~lat,
+        radius      = ~radius,
+        color       = "#00F5FF",
+        stroke      = FALSE,
+        fillColor   = "#00F5FF",
+        fillOpacity = 0.9,
+        label       = ~sprintf(
+          "%s: %s<br/>%s%s<br/>Records: %s",
+          group_label, grp,
+          loc_label, ifelse(!is.na(location_level0) & location_level0 != "", paste0(", ", location_level0), ""),
+          records
+        ) %>% lapply(htmltools::HTML),
+        group       = ~grp
+      ) %>%
+      addLayersControl(
+        overlayGroups = groups_present,
+        options = layersControlOptions(collapsed = FALSE)
+      )
+
+    for (g in groups_present) {
+      map <- map %>% hideGroup(g)
+    }
+
+    return(
+      map %>%
+        fitBounds(lng1 = lng_min, lat1 = lat_min, lng2 = lng_max, lat2 = lat_max)
     )
   }
 
@@ -1771,18 +1914,11 @@ renderLeaflet({
     return(
       leaflet() %>%
         addProviderTiles("CartoDB.DarkMatter") %>%
-        addControl("No locations could be geocoded at any level.",
-                   position = "topright")
+        addControl("No locations could be geocoded at any level.", position = "topright")
     )
   }
 
-  # -----------------------------
-  # Metric choice with safe default
-  # -----------------------------
   metric_choice <- input$map_metric
-
-  # When switching tabs, map_metric can come back NULL.
-  # In that case: force "records" and also reset the UI radio.
   if (is.null(metric_choice) || !metric_choice %in% c("records", "items", "price")) {
     metric_choice <- "records"
     session <- shiny::getDefaultReactiveDomain()
@@ -1799,24 +1935,10 @@ renderLeaflet({
     "records"
   )
 
-  # Extra safety: if somehow that column is missing, fall back to records
   if (!metric_col %in% colnames(pts_l0) ||
       !metric_col %in% colnames(pts_l1) ||
       !metric_col %in% colnames(pts_l2)) {
     metric_col <- "records"
-  }
-
-  compute_radius <- function(vals) {
-    if (length(vals) == 0 || all(is.na(vals))) {
-      return(numeric(0))
-    }
-    vals_num <- ifelse(is.na(vals), 0, vals)
-    val_max  <- max(vals_num, na.rm = TRUE)
-    if (val_max <= 0) {
-      rep(8, length(vals_num))
-    } else {
-      4 + 16 * (vals_num / val_max)
-    }
   }
 
   lng_min <- min(all_pts$lon, na.rm = TRUE)
@@ -1824,24 +1946,17 @@ renderLeaflet({
   lat_min <- min(all_pts$lat, na.rm = TRUE)
   lat_max <- max(all_pts$lat, na.rm = TRUE)
 
-  if (nrow(pts_l0) > 0) {
-    pts_l0$radius <- compute_radius(pts_l0[[metric_col]])
-  }
-  if (nrow(pts_l1) > 0) {
-    pts_l1$radius <- compute_radius(pts_l1[[metric_col]])
-  }
-  if (nrow(pts_l2) > 0) {
-    pts_l2$radius <- compute_radius(pts_l2[[metric_col]])
-  }
+  if (nrow(pts_l0) > 0) pts_l0$radius <- compute_radius(pts_l0[[metric_col]])
+  if (nrow(pts_l1) > 0) pts_l1$radius <- compute_radius(pts_l1[[metric_col]])
+  if (nrow(pts_l2) > 0) pts_l2$radius <- compute_radius(pts_l2[[metric_col]])
 
-  group_l0 <- "Level 0 (country)"
-  group_l1 <- "Level 1 (province/state)"
-  group_l2 <- "Level 2 (district/city)"
+  group_l0 <- "L0"
+  group_l1 <- "L1"
+  group_l2 <- "L2"
 
   map <- leaflet() %>%
     addProviderTiles("CartoDB.DarkMatter")
 
-  # Level 0
   if (nrow(pts_l0) > 0) {
     map <- map %>%
       addCircleMarkers(
@@ -1877,7 +1992,6 @@ renderLeaflet({
       )
   }
 
-  # Level 1
   if (nrow(pts_l1) > 0) {
     map <- map %>%
       addCircleMarkers(
@@ -1913,7 +2027,6 @@ renderLeaflet({
       )
   }
 
-  # Level 2
   if (nrow(pts_l2) > 0) {
     map <- map %>%
       addCircleMarkers(
@@ -1940,10 +2053,8 @@ renderLeaflet({
         fillOpacity= 0.9,
         label      = ~sprintf(
           "%s%s%s<br/>Records: %s<br/>Items: %s<br/>Price: %s",
-          ifelse(!is.na(location_level2) & location_level2 != "",
-                 paste0(location_level2, ", "), ""),
-          ifelse(!is.na(location_level1) & location_level1 != "",
-                 paste0(location_level1, ", "), ""),
+          ifelse(!is.na(location_level2) & location_level2 != "", paste0(location_level2, ", "), ""),
+          ifelse(!is.na(location_level1) & location_level1 != "", paste0(location_level1, ", "), ""),
           location_level0,
           ifelse(is.na(records), 0, records),
           ifelse(is.na(items),   0, items),
@@ -1967,17 +2078,12 @@ renderLeaflet({
   }
 
   if (group_l2 %in% groups_present) {
-    if (group_l0 %in% groups_present) {
-      map <- map %>% hideGroup(group_l0)
-    }
-    if (group_l1 %in% groups_present) {
-      map <- map %>% hideGroup(group_l1)
-    }
+    if (group_l0 %in% groups_present) map <- map %>% hideGroup(group_l0)
+    if (group_l1 %in% groups_present) map <- map %>% hideGroup(group_l1)
   }
 
   map %>%
-    fitBounds(lng1 = lng_min, lat1 = lat_min,
-              lng2 = lng_max, lat2 = lat_max)
+    fitBounds(lng1 = lng_min, lat1 = lat_min, lng2 = lng_max, lat2 = lat_max)
 })
 ```
 
@@ -4176,7 +4282,7 @@ output$ppu_cards <- renderUI({
 })
 ```
 
-Save & Export {data-icon="save"}
+Save & Export {data-icon="fa-save"}
 =====================================
 
 Row {data-height=500}
