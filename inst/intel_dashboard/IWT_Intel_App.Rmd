@@ -1301,14 +1301,67 @@ checkboxInput("filter_remove_anon",
 actionButton("reset_filters", "Reset filters")
 
 # Version / watermark text under the reset button
-div(
-  style = "margin-top: 12px; font-size: 10px; line-height: 1.2; color: #8fa3c8;",
-  HTML(
-    "Version 1.1 (BETA)<br/>",
-    "Developed by Russell Gray - Head of Data<br/>",
-    "ECOSOLVE | Global Initiative Against Transnational Organized Crime (GI-TOC)"
-  )
+tagList(
+  # Dev. Log hyperlink
+  tags$a(
+    href = "#",
+    id = "devlog_link",
+    style = "margin-top: 12px; display: inline-block; font-size: 10px; line-height: 1.2; color: #8fa3c8; text-decoration: underline;",
+    "Dev. Info"
+  ),
+
+  # Make sure we can call Shiny modal functions from JS
+  tags$head(
+    tags$style(HTML("
+      /* Force Shiny/Bootstrap modal to sit above flexdashboard/leaflet/plotly panes */
+      .modal, .shiny-modal {
+        z-index: 999999 !important;
+      }
+      .modal-backdrop, .shiny-modal-backdrop {
+        z-index: 999998 !important;
+      }
+      /* Some widgets create their own stacking contexts */
+      .leaflet-pane, .leaflet-map-pane, .leaflet-control, .plotly, .vis-network, .html-widget {
+        z-index: 0;
+      }
+    "))
+  ),
+
+  # JS handler: ask Shiny server to open a modal that is appended to <body> (always on top)
+  tags$script(HTML("
+    $(document).on('click', '#devlog_link', function(e){
+      e.preventDefault();
+      if (window.Shiny && Shiny.setInputValue) {
+        Shiny.setInputValue('devlog_open', Math.random(), {priority: 'event'});
+      }
+    });
+  "))
 )
+
+# ---- SERVER-SIDE: add this in your server logic (or in a chunk that runs server-side) ----
+# If you're in flexdashboard::flex_dashboard runtime: shiny, you can put this in a global chunk
+# that defines server <- function(input, output, session) { ... } OR inside the existing server.
+observeEvent(input$devlog_open, {
+  showModal(
+    modalDialog(
+      title = "Dev. Info",
+      easyClose = TRUE,
+      fade = TRUE,
+      footer = tagList(modalButton("Close")),
+      tags$div(
+        style = "font-size: 12px; line-height: 1.35; color: #cbd5e1;",
+        HTML(paste0(
+          "<div style='font-size: 12px; color:#8fa3c8; margin-bottom: 8px;'>Version / Build Info</div>",
+          "<div><b>Version 1.1 (BETA; December 2025)</b></div>",
+          "<div>Developed by Russell Gray - Head of Data</div>",
+          "<div>ECOSOLVE | Global Initiative Against Transnational Organized Crime (GI-TOC)</div>"
+        ))
+      ),
+      # style modal content to match your dark/cyan theme
+      size = "m"
+    )
+  )
+})
 ```
 
 Data Overview {data-icon="fa-chart-bar"}
