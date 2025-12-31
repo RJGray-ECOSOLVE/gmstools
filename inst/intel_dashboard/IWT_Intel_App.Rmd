@@ -3934,6 +3934,118 @@ renderDataTable({
 })
 ```
 
+### Seller Posts
+
+```{r}
+renderDataTable({
+  dat <- get_filtered_data()
+
+  validate(need("item_seller_name" %in% names(dat),
+                "item_seller_name field not found."))
+  validate(need("url" %in% names(dat),
+                "url field not found."))
+  validate(need("item_common_name" %in% names(dat),
+                "item_common_name field not found."))
+
+  sel <- input$net_graph_selected
+
+  if (is.null(sel) || is.null(sel$nodes) || length(sel$nodes) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "Select a seller node in the network graph."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  node_id <- sel$nodes[[1]]
+
+  if (!startsWith(node_id, "seller:")) {
+    return(
+      datatable(
+        data.frame(Message = "Select a SELLER node (not a platform/group)."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  seller_name <- sub("^seller:", "", node_id)
+
+  subdat <- dat %>%
+    dplyr::filter(item_seller_name == seller_name)
+
+  if (nrow(subdat) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "No records for this seller under current filters."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  posts_tab <- subdat %>%
+    dplyr::mutate(
+      url = as.character(url),
+      item_common_name = dplyr::if_else(
+        is.na(item_common_name) | item_common_name == "",
+        "[not recorded]",
+        as.character(item_common_name)
+      )
+    ) %>%
+    dplyr::filter(!is.na(url), url != "") %>%
+    dplyr::mutate(
+      url = trimws(url),
+      url_fixed = dplyr::if_else(
+        grepl("^https?://", url, ignore.case = TRUE),
+        url,
+        paste0("https://", url)
+      ),
+      # IMPORTANT: no href navigation (prevents RStudio/Viewer blank window)
+      Post = paste0(
+  "<a href='#' style='cursor:pointer;' ",
+  "onclick=\"event.preventDefault(); event.stopImmediatePropagation(); ",
+  "window.open('", htmltools::htmlEscape(url_fixed),
+  "', '_blank', 'noopener,noreferrer'); return false;\">",
+  "View Seller Post</a>"
+)
+    ) %>%
+    dplyr::select(Post, item_common_name) %>%
+    dplyr::rename(`Item (Common Name)` = item_common_name) %>%
+    dplyr::distinct() %>%
+    dplyr::arrange(`Item (Common Name)`)
+
+  if (nrow(posts_tab) == 0) {
+    return(
+      datatable(
+        data.frame(Message = "No usable URLs found for this seller under current filters."),
+        options  = list(dom = "t"),
+        rownames = FALSE
+      )
+    )
+  }
+
+  datatable(
+  posts_tab,
+  escape = FALSE,
+  selection = "none",
+  options = list(
+    dom = "t<'dt-bottom'p>",
+    paging = TRUE,
+    searching = FALSE,
+    lengthChange = FALSE,
+    info = FALSE,
+    pageLength = 8,
+    scrollY = "240px",
+    scrollX = TRUE
+  ),
+  rownames = FALSE
+)
+})
+```
+
 
 Financial Analysis {data-icon="fa-dollar-sign"}
 =====================================
@@ -3944,21 +4056,33 @@ Row {data-height=120}
 ### FX conversion controls
 
 ```{r}
-numericInput(
-  "fx_rate",
-  "Conversion factor (e.g. THB → EUR)",
-  value = 1,
-  min   = 0,
-  step  = 0.01
+fluidRow(
+  column(
+    width = 4,
+    numericInput(
+      "fx_rate",
+      "Conversion factor (e.g. THB → EUR)",
+      value = 1,
+      min   = 0,
+      step  = 0.01
+    )
+  ),
+  column(
+    width = 4,
+    textInput(
+      "fx_currency_label",
+      "Converted currency label (e.g. EUR, USD)",
+      value = ""
+    )
+  ),
+  column(
+    width = 4,
+    div(
+      style = "padding-top: 25px;",
+      actionButton("apply_conversion", "Apply conversion")
+    )
+  )
 )
-
-textInput(
-  "fx_currency_label",
-  "Converted currency label (e.g. EUR, USD)",
-  value = ""
-)
-
-actionButton("apply_conversion", "Apply conversion")
 ```
 
 Row {.tabset data-height=650}
