@@ -1,10 +1,22 @@
 gms_search_router <- function(){
-# app.R — GMS Search Router (Google dorking + fixed per-row Open buttons)
-# install.packages(c("shiny","DT","dplyr","purrr","tibble","stringr","glue",
-#                    "curl","readr","tidyr","shinyWidgets"))
+# ---- Packages: install if missing, then load quietly ----
+required_pkgs <- c(
+  "shiny","DT","dplyr","purrr","tibble","stringr","glue",
+  "curl","readr","tidyr","shinyWidgets"
+)
 
-library(shiny); library(DT); library(dplyr); library(purrr); library(tibble)
-library(stringr); library(glue); library(curl); library(readr); library(tidyr); library(shinyWidgets)
+install_if_missing <- function(pkgs) {
+  missing <- pkgs[!vapply(pkgs, requireNamespace, FUN.VALUE = logical(1), quietly = TRUE)]
+  if (length(missing) > 0) {
+    install.packages(missing, dependencies = TRUE)
+  }
+}
+
+install_if_missing(required_pkgs)
+
+suppressPackageStartupMessages({
+  lapply(required_pkgs, function(p) library(p, character.only = TRUE))
+})
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
@@ -437,3 +449,4 @@ server <- function(input, output, session){
 
 shinyApp(ui, server)
 }
+
