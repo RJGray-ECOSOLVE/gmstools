@@ -1,36 +1,41 @@
-run_network_app <- function(){
-# app.R — OSINT Friend Networks (v9.6)  [fix: restore Step 2 vetting modal + actions]
-# Key changes from v9.5:
-# - Enrichment table uses Scroller with paging=TRUE (required), pagination UI hidden via dom="fti".
-# - Save metadata now updates the table via dataTableProxy + replaceData(resetPaging=FALSE),
-#   so the scroll position (and selection) are preserved and no warning appears.
-# - FIX: Step 2 vetting modal restored (View Profile / Accept / Reject / Uncertain)
+run_network_appV2 <- function(){
+# app.R — OSINT Friend Networks (v9.7)
+# Changes from v9.6:
+# - Step 0 loader now accepts MULTIPLE .rds files and merges them into the current session.
+# - Merge rules:
+#     * saved_networks: appended; auto-rename on key collision with file tag.
+#     * poi_urls: first non-empty wins.
+#     * vetting: precedence reject > accept > uncertain > NA.
+#     * meta_df: merged by (name, profile_link, context, is_poi); non-empty values preferred; first finite lat/lng kept.
+#     * geocode_cache: union of keys; keeps existing entries.
+# - Step 2 vetting modal intact (View Profile / Accept / Reject / Uncertain).
+# - Enrichment table still uses Scroller with paging=TRUE and hidden pagination UI.
 
 options(shiny.maxRequestSize = 1024^3)
 options(shiny.launch.browser = TRUE)
 
-library(shiny)
-library(shinyjs)
-library(bslib)
-library(rvest)
-library(dplyr)
-library(stringr)
-library(readr)
-library(DT)
-library(purrr)
-library(htmltools)
-library(tidyr)
-library(igraph)
-library(visNetwork)
-library(RColorBrewer)
-library(shinycssloaders)
-library(writexl)
-library(leaflet)
-library(leaflet.extras)
-library(httr)
-library(jsonlite)
+# ---- Packages: install if missing, then load quietly ----
+required_pkgs <- c(
+  "shiny","shinyjs","bslib","rvest","dplyr","stringr","readr","DT","purrr","htmltools",
+  "tidyr","igraph","visNetwork","RColorBrewer","shinycssloaders","writexl","leaflet",
+  "leaflet.extras","httr","jsonlite"
+)
 
-app_version <- "9.6"
+install_if_missing <- function(pkgs) {
+  missing <- pkgs[!vapply(pkgs, requireNamespace, FUN.VALUE = logical(1), quietly = TRUE)]
+  if (length(missing) > 0) {
+    install.packages(missing, dependencies = TRUE)
+  }
+}
+
+install_if_missing(required_pkgs)
+
+suppressPackageStartupMessages({
+  lapply(required_pkgs, function(p) library(p, character.only = TRUE))
+})
+
+
+app_version <- "9.8"
 
 # ---------- Helpers ----------
 esc <- function(x){
@@ -139,6 +144,7 @@ poi_from_filename <- function(filename){
   trimws(base)
 }
 
+# Simple OSM geocoder (first result)
 geocode_osm <- function(query){
   if (is.null(query) || !nzchar(query)) return(NULL)
   r <- tryCatch({
@@ -161,6 +167,85 @@ geocode_osm <- function(query){
 
 `%||%` <- function(x, y) if (is.null(x) || (length(x) == 1 && is.na(x))) y else x
 
+# ---------- Merge helpers for multi-session import ----------
+coalesce_chr <- function(...) {
+  vals <- as.character(c(...))
+  vals <- vals[!is.na(vals) & nzchar(vals)]
+  if (length(vals)) vals[1] else ""
+}
+coalesce_num <- function(...) {
+  vals <- suppressWarnings(as.numeric(c(...)))
+  vals <- vals[is.finite(vals)]
+  if (length(vals)) vals[1] else NA_real_
+}
+
+std_meta <- function(df){
+  if (is.null(df) || !is.data.frame(df) || !nrow(df)) {
+    return(tibble(
+      name=character(), profile_link=character(), context=character(),
+      phone=character(), email=character(), species=character(),
+      location=character(), lat=numeric(), lng=numeric(), is_poi=logical()
+    ))
+  }
+  need <- c("name","profile_link","context","phone","email","species","location","lat","lng","is_poi")
+  for (nm in need) if (!nm %in% names(df)) df[[nm]] <- NA
+  df[need]
+}
+
+merge_meta <- function(a, b){
+  bind_rows(std_meta(a), std_meta(b)) %>%
+    group_by(name, profile_link, context, is_poi) %>%
+    summarise(
+      phone    = coalesce_chr(phone),
+      email    = coalesce_chr(email),
+      species  = coalesce_chr(species),
+      location = coalesce_chr(location),
+      lat      = coalesce_num(lat),
+      lng      = coalesce_num(lng),
+      .groups  = "drop"
+    )
+}
+
+merge_vetting <- function(a, b){
+  # precedence: reject > accept > uncertain > NA
+  prec <- c(reject = 3, accept = 2, uncertain = 1)
+  ids <- union(names(a), names(b))
+  out <- setNames(rep(NA_character_, length(ids)), ids)
+  for (id in ids){
+    cand <- na.omit(c(a[id], b[id]))
+    if (!length(cand)) next
+    scores <- prec[cand]; scores[is.na(scores)] <- -Inf
+    out[id] <- cand[ which.max(scores) ]
+  }
+  out
+}
+
+merge_poi_urls <- function(a, b){
+  keys <- union(names(a), names(b))
+  out <- list()
+  for (k in keys){
+    va <- a[[k]] %||% ""
+    vb <- b[[k]] %||% ""
+    out[[k]] <- if (nzchar(va)) va else vb
+  }
+  out
+}
+
+append_list_unique <- function(store, add, tag = NULL){
+  if (!length(add)) return(store)
+  for (nm in names(add)){
+    key <- nm
+    if (key %in% names(store)){
+      base <- if (nzchar(tag)) paste0(nm, " — from ", tag) else paste0(nm, " (import)")
+      k2 <- base; i <- 2
+      while (k2 %in% names(store)) { k2 <- paste0(base, " (", i, ")"); i <- i + 1 }
+      key <- k2
+    }
+    store[[key]] <- add[[nm]]
+  }
+  store
+}
+
 # ---------- Theme ----------
 theme <- bs_theme(version = 5, bootswatch = "flatly", base_font = font_google("Inter"))
 
@@ -170,12 +255,7 @@ ui <- page_fluid(
   useShinyjs(),
   tags$head(
     tags$style(HTML(
-      "
-      /* Make the enrichment table body scroll inside the panel */
-      #meta_table .dataTables_scrollBody {
-        max-height: calc(72vh) !important;
-      }
-      "
+      "\n      /* Make the enrichment table body scroll inside the panel */\n      #meta_table .dataTables_scrollBody {\n        max-height: calc(72vh) !important;\n      }\n      "
     ))
   ),
   titlePanel("OSINT Friend Networks"),
@@ -196,10 +276,11 @@ ui <- page_fluid(
                  tags$li("Export Maltego edges in ", tags$b("Step 4"), ".")
                ),
                tags$hr(),
-               h4("Load a saved session"),
+               h4("Load saved sessions (multi-file)"),
                fileInput("upload_session", NULL, accept = ".rds",
-                         buttonLabel = "Choose .rds…", placeholder = "No file selected"),
-               actionButton("load_session_btn", "Load Session", class = "btn btn-outline-primary"),
+                         buttonLabel = "Choose .rds…", placeholder = "No files selected",
+                         multiple = TRUE),   # <-- allow multiple
+               actionButton("load_session_btn", "Load & Merge", class = "btn btn-outline-primary"),
                tags$hr(),
                tags$small("Note: Session files are local .rds snapshots (no cloud storage).")
         )
@@ -373,44 +454,82 @@ server <- function(input, output, session){
     Phone=character(), Email=character(), Species=character(), Location=character()
   ))
   
-  # ---------------- Step 0: Load Session (.rds) ----------------
+  # ---------------- Step 0: Load & MERGE Sessions (.rds) ----------------
   observeEvent(input$load_session_btn, {
     req(input$upload_session)
-    path <- input$upload_session$datapath
-    st <- tryCatch(readRDS(path), error = function(e) NULL)
-    if (is.null(st) || !is.list(st)){
-      showNotification("Failed to load session: not a valid .rds file.", type = "error"); return(NULL)
-    }
-    sn <- st$saved_networks; if (!is.list(sn)) sn <- list()
-    pu <- st$poi_urls %||% list()
-    vt <- st$vetting %||% setNames(character(0), character(0))
-    md <- st$meta_df
-    if (is.null(md) || !is.data.frame(md)){
-      md <- tibble(
-        name = character(), profile_link = character(), context = character(),
-        phone = character(), email = character(), species = character(),
-        location = character(), lat = numeric(), lng = numeric(),
-        is_poi = logical()
-      )
-    }
-    gcx <- st$geocode_cache %||% list()
+    files <- input$upload_session
+    paths <- files$datapath
+    fnames <- files$name
     
-    saved_networks(sn); poi_urls(pu); vetting(vt); meta_df(md); geocode_cache(gcx)
-    apply_filter(FALSE); meta_selected_id(NULL); loc_value(""); loc_coords(c(NA_real_, NA_real_))
+    cur_sn   <- saved_networks()
+    cur_pu   <- poi_urls()
+    cur_vt   <- vetting()
+    cur_md   <- meta_df()
+    cur_gcx  <- geocode_cache()
     
-    updateSelectInput(session, "saved_choice", choices = names(sn), selected = if (length(sn)) names(sn)[1] else "")
-    updateCheckboxGroupInput(session, "include_networks", selected = names(sn))
+    withProgress(message = "Loading sessions…", value = 0, {
+      n <- length(paths)
+      for (i in seq_along(paths)){
+        incProgress(1/n, detail = fnames[i])
+        st <- tryCatch(readRDS(paths[i]), error = function(e) NULL)
+        if (is.null(st) || !is.list(st)) {
+          showNotification(paste("Skipped:", fnames[i], "— not a valid .rds"), type = "warning")
+          next
+        }
+        sn  <- st$saved_networks; if (!is.list(sn)) sn <- list()
+        pu  <- st$poi_urls %||% list()
+        vt  <- st$vetting %||% setNames(character(0), character(0))
+        md  <- st$meta_df
+        gcx <- st$geocode_cache %||% list()
+        
+        tag <- tools::file_path_sans_ext(basename(fnames[i]))
+        
+        cur_sn  <- append_list_unique(cur_sn, sn, tag = tag)
+        cur_pu  <- merge_poi_urls(cur_pu, pu)
+        cur_vt  <- merge_vetting(cur_vt, vt)
+        cur_md  <- merge_meta(cur_md, md)
+        
+        all_keys <- union(names(cur_gcx), names(gcx))
+        merged_gcx <- cur_gcx
+        for (k in all_keys) {
+          if (!is.null(cur_gcx[[k]])) next
+          merged_gcx[[k]] <- gcx[[k]]
+        }
+        cur_gcx <- merged_gcx
+      }
+    })
     
+    saved_networks(cur_sn)
+    poi_urls(cur_pu)
+    vetting(cur_vt)
+    meta_df(cur_md)
+    geocode_cache(cur_gcx)
+    
+    parsed(tibble(POI = character(), name = character(), context = character(), profile_url = character()))
+    reset("html_file"); updateTextInput(session, "poi_url", value = "")
+    
+    updateSelectInput(session, "saved_choice", choices = names(cur_sn), selected = if (length(cur_sn)) names(cur_sn)[1] else "")
+    updateCheckboxGroupInput(session, "include_networks", choices = names(cur_sn), selected = names(cur_sn))
+    
+    md <- cur_md
     if (nrow(md)) {
       out <- md %>% arrange(desc(is_poi), name) %>%
-        transmute(POI = ifelse(is_poi, "Yes", ""), Name = name, URL = profile_link, Context = context,
-                  Phone = phone, Email = email, Species = species, Location = location)
+        transmute(
+          POI = ifelse(is_poi, "Yes", ""),
+          Name = name,
+          URL  = profile_link,
+          Context = context,
+          Phone = phone,
+          Email = email,
+          Species = species,
+          Location = location
+        )
       meta_table_data(out)
     } else {
       meta_table_data(meta_table_data()[0,])
     }
     
-    showNotification(paste0("Session loaded (app v", app_version, ")."), type = "message", duration = 5)
+    showNotification(paste0("Loaded & merged ", length(paths), " session file", ifelse(length(paths)>1,"s",""), "."), type = "message", duration = 6)
   }, ignoreInit = TRUE)
   
   # ---------------- Step 1: upload -> suggest POI ----------------
@@ -670,7 +789,7 @@ server <- function(input, output, session){
       )
   })
   
-  # --- Step 2: Node modal + vetting actions (restored) ---
+  # --- Step 2: Node modal + vetting actions ---
   observeEvent(input$node_click, {
     req(input$node_click)
     nd <- tryCatch(network_data(), error = function(e) NULL); req(!is.null(nd))
@@ -781,9 +900,9 @@ server <- function(input, output, session){
         scrollY = 400,
         scroller = TRUE,
         deferRender = TRUE,
-        paging = TRUE,      # required by Scroller
+        paging = TRUE,
         stateSave = TRUE,
-        dom = "fti",        # hides pagination UI
+        dom = "fti",
         scrollX = TRUE
       )
     )
@@ -882,7 +1001,7 @@ server <- function(input, output, session){
     df$species[idx]  <- input$meta_species %||% ""
     df$location[idx] <- loc_value() %||% ""
     df$lat[idx]      <- coords[1]; df$lng[idx] <- coords[2]
-    meta_df(df)  # persist
+    meta_df(df)
     
     out_new <- df %>% arrange(desc(is_poi), name) %>% transmute(
       POI = ifelse(is_poi, "Yes", ""),
@@ -1051,5 +1170,5 @@ server <- function(input, output, session){
 }
 
 shinyApp(ui, server)
-}
 
+}
