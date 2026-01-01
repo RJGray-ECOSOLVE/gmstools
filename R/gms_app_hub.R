@@ -13,18 +13,29 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
   
   `%||%` <- function(x, y) if (is.null(x)) y else x
   
-  # ---- App registry (edit labels/icons as you like) ----
+  # ---- App registry (local apps + external links) ----
   # key must be unique and stable
+  # kind: "local" starts a child R process; "external" just loads a URL in the iframe
   app_registry <- tibble::tibble(
-    key   = c("data_model", "search_router", "intel_dashboard", "network_v2"),
-    title = c("Data Model Builder", "GMS Search Router", "Intel Dashboard", "OSINT Friend Networks"),
+    key   = c("data_model", "search_router", "intel_dashboard", "network_v2",
+              "ecosolve_gms", "ecosolve_site"),
+    title = c("Data Model Builder", "GMS Search Router", "Intel Dashboard", "OSINT Friend Networks",
+              "Eco-Solve Global Monitoring System", "Eco-Solve Website"),
     desc  = c(
       "Build/export field templates and data dictionaries.",
       "Launch native searches + Google dork packs across platforms.",
       "Flexdashboard for IWT intelligence analytics.",
-      "Parse FB friends HTML, build networks, vet nodes, export to Maltego."
+      "Parse FB friends HTML, build networks, vet nodes, export to Maltego.",
+      "Open the Eco-Solve GMS login portal.",
+      "Open the Eco-Solve dashboard website."
     ),
-    icon  = c("database", "search", "chart-line", "project-diagram")
+    icon  = c("database", "search", "chart-line", "project-diagram",
+              "shield-alt", "file-lines"),
+    kind  = c("local", "local", "local", "local",
+              "external", "external"),
+    url   = c(NA, NA, NA, NA,
+              "https://gms.ecosolve.eco/login",
+              "https://www.ecosolve.eco/dashboard")
   )
   
   # ---- Child process management ----
@@ -55,18 +66,15 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
     proc_state$ports[[key]] <- child_port
     
     # Build an expression that runs *inside* a fresh R session
-    # IMPORTANT: gmstools must be installed for this to work (or adjust to source your functions)
     run_expr <- switch(
       key,
-      "data_model" = sprintf("shiny::runApp(gmstools::data_model_app(), port=%d, host='127.0.0.1', launch.browser=FALSE)", child_port),
-      "search_router" = sprintf("shiny::runApp(gmstools::gms_search_router(), port=%d, host='127.0.0.1', launch.browser=FALSE)", child_port),
-      "intel_dashboard" = sprintf("gmstools::run_intel_dashboard(launch.browser=FALSE, port=%d)", child_port),
-      "network_v2" = sprintf("shiny::runApp(gmstools::run_network_appV2(), port=%d, host='127.0.0.1', launch.browser=FALSE)", child_port),
+      "data_model"       = sprintf("shiny::runApp(gmstools::data_model_app(), port=%d, host='127.0.0.1', launch.browser=FALSE)", child_port),
+      "search_router"    = sprintf("shiny::runApp(gmstools::gms_search_router(), port=%d, host='127.0.0.1', launch.browser=FALSE)", child_port),
+      "intel_dashboard"  = sprintf("gmstools::run_intel_dashboard(launch.browser=FALSE, port=%d)", child_port),
+      "network_v2"       = sprintf("shiny::runApp(gmstools::run_network_appV2(), port=%d, host='127.0.0.1', launch.browser=FALSE)", child_port),
       stop("Unknown app key: ", key, call. = FALSE)
     )
     
-    # Launch background R
-    # Use Rscript so it works cross-platform
     cmd <- c(
       "-e",
       paste0(
@@ -168,17 +176,17 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
         }
 
         .hub-grid{
-    display:grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
-    margin-top: 14px;
-  }
+          display:grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 14px;
+          margin-top: 14px;
+        }
 
-  @media (max-width: 900px){
-    .hub-grid{
-      grid-template-columns: 1fr;
-    }
-  }
+        @media (max-width: 900px){
+          .hub-grid{
+            grid-template-columns: 1fr;
+          }
+        }
 
         .hub-card{
           background: linear-gradient(180deg, var(--hub-card), rgba(0,0,0,0.18));
@@ -292,11 +300,17 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       if (is.null(key)) {
         tagList(shiny::icon("circle"), "Idle")
       } else {
-        ttl <- app_registry$title[match(key, app_registry$key)]
-        if (is_running(key)) {
-          tagList(shiny::icon("circle"), paste0("Running: ", ttl))
+        idx <- match(key, app_registry$key)
+        ttl <- app_registry$title[idx]
+        knd <- app_registry$kind[idx]
+        if (isTRUE(knd == "external")) {
+          tagList(shiny::icon("circle"), paste0("Viewing: ", ttl))
         } else {
-          tagList(shiny::icon("circle"), paste0("Selected: ", ttl))
+          if (is_running(key)) {
+            tagList(shiny::icon("circle"), paste0("Running: ", ttl))
+          } else {
+            tagList(shiny::icon("circle"), paste0("Selected: ", ttl))
+          }
         }
       }
     })
@@ -314,10 +328,23 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       )
     }
     
+    resolve_view_url <- function(key) {
+      idx <- match(key, app_registry$key)
+      if (is.na(idx)) return("about:blank")
+      knd <- app_registry$kind[idx]
+      if (isTRUE(knd == "external")) {
+        u <- app_registry$url[idx]
+        if (is.na(u) || !nzchar(u)) "about:blank" else u
+      } else {
+        u <- child_url(key)
+        if (is.null(u) || !nzchar(u)) "about:blank" else u
+      }
+    }
+    
     render_iframe <- function(key) {
-      ttl <- app_registry$title[match(key, app_registry$key)]
-      url <- child_url(key)
-      if (is.null(url) || !nzchar(url)) url <- "about:blank"
+      idx <- match(key, app_registry$key)
+      ttl <- app_registry$title[idx]
+      url <- resolve_view_url(key)
       tagList(
         tags$div(class = "hub-view",
                  tags$iframe(class = "hub-iframe", src = url)
@@ -343,6 +370,17 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
         showNotification("No app selected.", type = "message")
         return()
       }
+      
+      idx <- match(key, app_registry$key)
+      knd <- app_registry$kind[idx]
+      
+      if (isTRUE(knd == "external")) {
+        # Nothing to stop for external pages
+        showNotification("Closed page.", type = "message")
+        current_key(NULL)
+        return()
+      }
+      
       stop_child(key)
       showNotification("Stopped app.", type = "message")
       current_key(NULL)
@@ -352,17 +390,23 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       key <- input$launch_app
       if (is.null(key) || !key %in% app_registry$key) return()
       
-      # Start child if needed
-      start_child(key)
+      idx <- match(key, app_registry$key)
+      knd <- app_registry$kind[idx]
       
-      # Small delay helps on slower machines; iframe will still load once ready
+      if (isTRUE(knd == "external")) {
+        current_key(key)
+        showNotification("Opening…", type = "message", duration = 2)
+        return()
+      }
+      
+      start_child(key)
       current_key(key)
       showNotification("Launching…", type = "message", duration = 2)
     }, ignoreInit = TRUE)
     
     session$onSessionEnded(function() {
       # Clean up child apps when hub closes
-      for (k in app_registry$key) stop_child(k)
+      for (k in app_registry$key[app_registry$kind == "local"]) stop_child(k)
     })
   }
   
@@ -374,3 +418,6 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
     shiny::runApp(app, port = port, launch.browser = FALSE)
   }
 }
+
+
+gms_app_hub()
