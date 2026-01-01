@@ -418,6 +418,3 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
     shiny::runApp(app, port = port, launch.browser = FALSE)
   }
 }
-
-
-gms_app_hub()
