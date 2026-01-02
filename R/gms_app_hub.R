@@ -13,30 +13,62 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
   
   `%||%` <- function(x, y) if (is.null(x)) y else x
   
-  # ---- App registry (local apps + external links) ----
-  # key must be unique and stable
-  # kind: "local" starts a child R process; "external" just loads a URL in the iframe
+  # ---- App registry (workflow order 1 -> 6) ----
+  # Flow: establish template, search, record to DMS, analyse, OSINT networks, QA/management
   app_registry <- tibble::tibble(
-    key   = c("data_model", "search_router", "intel_dashboard", "network_v2",
-              "ecosolve_gms", "ecosolve_site"),
-    title = c("Data Model Builder", "GMS Search Router", "Intel Dashboard", "OSINT Friend Networks",
-              "Eco-Solve Global Monitoring System", "Eco-Solve Website"),
-    desc  = c(
-      "Build/export field templates and data dictionaries.",
-      "Launch native searches + Google dork packs across platforms.",
-      "Flexdashboard for IWT intelligence analytics.",
-      "Parse FB friends HTML, build networks, vet nodes, export to Maltego.",
-      "Open the Eco-Solve GMS login portal.",
-      "Open the Eco-Solve dashboard website."
+    key   = c(
+      "data_model",
+      "search_router",
+      "ecosolve_gms",
+      "intel_dashboard",
+      "network_v2",
+      "admin_panel"
     ),
-    icon  = c("database", "search", "chart-line", "project-diagram",
-              "shield-alt", "file-lines"),
-    kind  = c("local", "local", "local", "local",
-              "external", "external"),
-    url   = c(NA, NA, NA, NA,
-              "https://gms.ecosolve.eco/login",
-              "https://www.ecosolve.eco/dashboard")
+    step  = c(1, 2, 3, 4, 5, 6),
+    title = c(
+      "Data Model Builder",
+      "GMS Search Router",
+      "Eco-Solve Global Monitoring System",
+      "Intel Dashboard",
+      "OSINT Friend Networks",
+      "GMS Admin & QA Panel"
+    ),
+    desc  = c(
+      "Define what data the team will capture and standardise field templates.",
+      "Search for and collect online ads across platforms using native searches and dork syntax.",
+      "Enter validated ads into the Data Management System, monitor operational cases, and use the AI webscraper.",
+      "Explore, visualise, and summarise captured data for IWT intelligence.",
+      "Identify trafficker networks and POI accounts from social graphs.",
+      "Run quality control and assurance checks, review coverage, and support management decisions."
+    ),
+    cta   = c(
+      "Establish data model",
+      "Search & collect data",
+      "Record & monitor data",
+      "Analyse data",
+      "Map trafficker networks",
+      "Review QA & management"
+    ),
+    icon  = c(
+      "layer-group",       # stacked model
+      "search",
+      "database",
+      "chart-line",
+      "project-diagram",
+      "clipboard-check"
+    )
   )
+  
+  # External website keys (no child process)
+  external_keys <- c("ecosolve_gms")
+  
+  external_url <- function(key) {
+    switch(
+      key,
+      "ecosolve_gms" = "https://gms.ecosolve.eco/login",
+      NULL
+    )
+  }
   
   # ---- Child process management ----
   proc_state <- new.env(parent = emptyenv())
@@ -60,18 +92,37 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
   
   # Start selected app in a background R process on a random free port
   start_child <- function(key) {
+    # External steps do not spawn a child; iframe just points to URL
+    if (key %in% external_keys) return(invisible(TRUE))
+    
     if (is_running(key)) return(invisible(TRUE))
     
     child_port <- httpuv::randomPort()
     proc_state$ports[[key]] <- child_port
     
-    # Build an expression that runs *inside* a fresh R session
+    # Expression that runs inside a fresh R session
     run_expr <- switch(
       key,
-      "data_model"       = sprintf("shiny::runApp(gmstools::data_model_app(), port=%d, host='127.0.0.1', launch.browser=FALSE)", child_port),
-      "search_router"    = sprintf("shiny::runApp(gmstools::gms_search_router(), port=%d, host='127.0.0.1', launch.browser=FALSE)", child_port),
-      "intel_dashboard"  = sprintf("gmstools::run_intel_dashboard(launch.browser=FALSE, port=%d)", child_port),
-      "network_v2"       = sprintf("shiny::runApp(gmstools::run_network_appV2(), port=%d, host='127.0.0.1', launch.browser=FALSE)", child_port),
+      "data_model"      = sprintf(
+        "shiny::runApp(gmstools::data_model_app(), port=%d, host='127.0.0.1', launch.browser=FALSE)",
+        child_port
+      ),
+      "search_router"   = sprintf(
+        "shiny::runApp(gmstools::gms_search_router(), port=%d, host='127.0.0.1', launch.browser=FALSE)",
+        child_port
+      ),
+      "intel_dashboard" = sprintf(
+        "gmstools::run_intel_dashboard(launch.browser=FALSE, port=%d)",
+        child_port
+      ),
+      "network_v2"      = sprintf(
+        "shiny::runApp(gmstools::run_network_appV2(), port=%d, host='127.0.0.1', launch.browser=FALSE)",
+        child_port
+      ),
+      "admin_panel"     = sprintf(
+        "shiny::runApp(gmstools::admin_panel(), port=%d, host='127.0.0.1', launch.browser=FALSE)",
+        child_port
+      ),
       stop("Unknown app key: ", key, call. = FALSE)
     )
     
@@ -104,23 +155,38 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
   
   # ---- UI bits ----
   theme <- bslib::bs_theme(
-    version = 5,
+    version    = 5,
     bootswatch = "darkly",
-    base_font = bslib::font_google("Inter")
+    base_font  = bslib::font_google("Inter")
   )
   
-  card_button <- function(key, title, desc, icon) {
+  card_button <- function(step, key, title, desc, cta, icon) {
     tags$div(
       class = "hub-card",
       tags$button(
         type = "button",
         class = "hub-card-btn",
-        onclick = sprintf("Shiny.setInputValue('launch_app', '%s', {priority:'event'});", key),
-        tags$div(class = "hub-icon", shiny::icon(icon)),
+        onclick = sprintf(
+          "Shiny.setInputValue('launch_app', '%s', {priority:'event'});",
+          key
+        ),
+        tags$div(
+          class = "flow-card-header",
+          tags$div(class = "flow-step-badge", step),
+          tags$div(class = "hub-icon", shiny::icon(icon))
+        ),
         tags$div(
           class = "hub-card-text",
-          tags$div(class = "hub-title", title),
+          tags$div(
+            class = "hub-title",
+            sprintf("%d. %s", step, title)
+          ),
           tags$div(class = "hub-desc", desc)
+        ),
+        tags$div(
+          class = "flow-cta-row",
+          tags$span(class = "flow-cta-label", cta),
+          tags$span(class = "flow-cta-arrow", shiny::icon("arrow-right-long"))
         )
       )
     )
@@ -142,15 +208,18 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
           --hub-muted: rgba(255,255,255,0.65);
         }
 
-        body { background: radial-gradient(1200px 800px at 10% 0%, rgba(34,211,238,0.10), transparent 60%),
-                           radial-gradient(1000px 700px at 90% 20%, rgba(34,211,238,0.08), transparent 55%),
-                           var(--hub-bg);
-               color: var(--hub-text);
+        body {
+          background:
+            radial-gradient(1200px 800px at 10% 0%, rgba(34,211,238,0.10), transparent 60%),
+            radial-gradient(1000px 700px at 90% 20%, rgba(34,211,238,0.08), transparent 55%),
+            var(--hub-bg);
+          color: var(--hub-text);
         }
 
         .hub-shell{ padding: 26px; height: 100vh; box-sizing: border-box; }
         .hub-header{
-          display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom: 18px;
+          display:flex; align-items:center; justify-content:space-between;
+          gap:16px; margin-bottom: 18px;
         }
         .hub-brand{
           display:flex; align-items:center; gap:12px;
@@ -176,13 +245,23 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
         }
 
         .hub-grid{
+          position: relative;
           display:grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 14px;
-          margin-top: 14px;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 16px;
+          margin-top: 18px;
+          max-width: 1200px;
+          margin-left:auto;
+          margin-right:auto;
         }
 
-        @media (max-width: 900px){
+        @media (max-width: 1100px){
+          .hub-grid{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 780px){
           .hub-grid{
             grid-template-columns: 1fr;
           }
@@ -201,16 +280,40 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
           text-align: left;
           background: transparent;
           border: 0;
-          padding: 16px;
+          padding: 16px 16px 14px 16px;
           color: var(--hub-text);
           display:flex;
-          gap: 14px;
+          flex-direction:column;
+          gap: 6px;
           align-items:flex-start;
         }
 
         .hub-card-btn:hover{
           background: linear-gradient(180deg, var(--hub-card2), rgba(0,0,0,0.10));
           cursor: pointer;
+        }
+
+        .flow-card-header{
+          width: 100%;
+          display:flex;
+          align-items:center;
+          justify-content:space-between;
+          margin-bottom: 4px;
+        }
+
+        .flow-step-badge{
+          min-width: 26px;
+          height: 26px;
+          border-radius: 999px;
+          border: 1px solid rgba(34,211,238,0.7);
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--hub-accent);
+          background: radial-gradient(circle at 30% 0%, rgba(34,211,238,0.32), transparent 65%);
+          box-shadow: 0 0 12px rgba(34,211,238,0.7);
         }
 
         .hub-icon{
@@ -224,6 +327,24 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
 
         .hub-title{ font-weight: 700; font-size: 15px; margin-bottom: 4px; }
         .hub-desc{ color: var(--hub-muted); font-size: 12.5px; line-height: 1.35; }
+
+        .flow-cta-row{
+          margin-top: 6px;
+          display:flex;
+          align-items:center;
+          justify-content:space-between;
+          font-size: 12px;
+          color: var(--hub-accent2);
+        }
+
+        .flow-cta-label{
+          letter-spacing: 0.03em;
+          text-transform: uppercase;
+        }
+
+        .flow-cta-arrow i{
+          font-size: 13px;
+        }
 
         .hub-view{
           height: calc(100vh - 90px);
@@ -246,6 +367,8 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
           border: 1px solid rgba(34,211,238,0.25) !important;
           background: rgba(34,211,238,0.08) !important;
           color: var(--hub-text) !important;
+          font-size: 12px;
+          padding: 6px 10px;
         }
         .btn-hub:hover{ background: rgba(34,211,238,0.14) !important; }
         .btn-hub-danger{
@@ -253,6 +376,8 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
           border: 1px solid rgba(239,68,68,0.25) !important;
           background: rgba(239,68,68,0.08) !important;
           color: var(--hub-text) !important;
+          font-size: 12px;
+          padding: 6px 10px;
         }
         .btn-hub-danger:hover{ background: rgba(239,68,68,0.14) !important; }
 
@@ -273,16 +398,20 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
         class = "hub-header",
         tags$div(
           class = "hub-brand",
-          tags$div(class = "hub-logo", shiny::icon("globe")),
+          tags$div(class = "hub-logo", shiny::icon("house")),
           tags$div(
             class = "hub-titlebar",
             tags$div(class = "h1", "GMS App Hub"),
-            tags$p(class = "hub-sub", "Launch tools, return to home, switch apps (local session).")
+            tags$p(
+              class = "hub-sub",
+              "Step through the GMS workflow: define data, search, record, analyse, map networks, and run QA/management checks."
+            )
           )
         ),
         tags$div(
           class = "hub-top-actions",
           tags$span(class = "pill", uiOutput("status_pill")),
+          actionButton("btn_devinfo", "Dev info", class = "btn btn-hub"),
           actionButton("btn_home", "Home", class = "btn btn-hub"),
           actionButton("btn_stop", "Stop current app", class = "btn btn-hub-danger")
         )
@@ -300,17 +429,13 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       if (is.null(key)) {
         tagList(shiny::icon("circle"), "Idle")
       } else {
-        idx <- match(key, app_registry$key)
-        ttl <- app_registry$title[idx]
-        knd <- app_registry$kind[idx]
-        if (isTRUE(knd == "external")) {
-          tagList(shiny::icon("circle"), paste0("Viewing: ", ttl))
+        ttl <- app_registry$title[match(key, app_registry$key)]
+        if (!is.null(ttl) && key %in% external_keys) {
+          tagList(shiny::icon("circle"), paste0("Viewing external: ", ttl))
+        } else if (!is.null(ttl) && is_running(key)) {
+          tagList(shiny::icon("circle"), paste0("Running: ", ttl))
         } else {
-          if (is_running(key)) {
-            tagList(shiny::icon("circle"), paste0("Running: ", ttl))
-          } else {
-            tagList(shiny::icon("circle"), paste0("Selected: ", ttl))
-          }
+          tagList(shiny::icon("circle"), paste0("Selected: ", ttl))
         }
       }
     })
@@ -318,9 +443,11 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
     render_home <- function() {
       cards <- Map(
         card_button,
+        step  = app_registry$step,
         key   = app_registry$key,
         title = app_registry$title,
         desc  = app_registry$desc,
+        cta   = app_registry$cta,
         icon  = app_registry$icon
       )
       tagList(
@@ -328,29 +455,22 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       )
     }
     
-    resolve_view_url <- function(key) {
-      idx <- match(key, app_registry$key)
-      if (is.na(idx)) return("about:blank")
-      knd <- app_registry$kind[idx]
-      if (isTRUE(knd == "external")) {
-        u <- app_registry$url[idx]
-        if (is.na(u) || !nzchar(u)) "about:blank" else u
-      } else {
-        u <- child_url(key)
-        if (is.null(u) || !nzchar(u)) "about:blank" else u
-      }
-    }
-    
     render_iframe <- function(key) {
-      idx <- match(key, app_registry$key)
-      ttl <- app_registry$title[idx]
-      url <- resolve_view_url(key)
+      ttl <- app_registry$title[match(key, app_registry$key)]
+      url <- if (key %in% external_keys) {
+        external_url(key)
+      } else {
+        child_url(key)
+      }
+      if (is.null(url) || !nzchar(url)) url <- "about:blank"
       tagList(
-        tags$div(class = "hub-view",
-                 tags$iframe(class = "hub-iframe", src = url)
+        tags$div(
+          class = "hub-view",
+          tags$iframe(class = "hub-iframe", src = url)
         ),
-        tags$div(style="margin-top:10px; color: rgba(255,255,255,0.55); font-size:12px;",
-                 paste0("Viewing: ", ttl, "  |  ", url)
+        tags$div(
+          style = "margin-top:10px; color: rgba(255,255,255,0.55); font-size:12px;",
+          paste0("Viewing: ", ttl, "  |  ", url)
         )
       )
     }
@@ -358,6 +478,52 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
     output$main_view <- renderUI({
       key <- current_key()
       if (is.null(key)) render_home() else render_iframe(key)
+    })
+    
+    # Dev info modal
+    observeEvent(input$btn_devinfo, {
+      pkg_ver <- tryCatch(
+        as.character(utils::packageVersion("gmstools")),
+        error = function(e) "Unknown"
+      )
+      r_ver   <- R.version.string
+      plat    <- paste(R.version$platform, collapse = "")
+      timestamp <- as.character(Sys.time())
+      
+      showModal(
+        modalDialog(
+          title = "GMS App Hub · Dev Info",
+          easyClose = TRUE,
+          footer = modalButton("Close"),
+          size = "m",
+          tags$p("Environment snapshot for debugging and deployment checks:"),
+          tags$ul(
+            tags$li(tags$b("Developed by: "), "Russell Gray | Head of Data - ECOSOLVE | GI-TOC"),
+            tags$li(tags$b("gmstools version: "), pkg_ver),
+            tags$li(tags$b("R version: "), r_ver),
+            tags$li(tags$b("Platform: "), plat),
+            tags$li(tags$b("Session timestamp: "), timestamp)
+          ),
+          tags$hr(),
+          tags$p("Codebase and issue tracking:"),
+          tags$ul(
+            tags$li(
+              tags$a(
+                href = "https://github.com/RJGray-ECOSOLVE/gmstools",
+                target = "_blank",
+                "gmstools GitHub repository"
+              )
+            ),
+            tags$li(
+              tags$a(
+                href = "https://github.com/RJGray-ECOSOLVE/gmstools/issues",
+                target = "_blank",
+                "Open / review GitHub issues"
+              )
+            )
+          )
+        )
+      )
     })
     
     observeEvent(input$btn_home, {
@@ -370,19 +536,12 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
         showNotification("No app selected.", type = "message")
         return()
       }
-      
-      idx <- match(key, app_registry$key)
-      knd <- app_registry$kind[idx]
-      
-      if (isTRUE(knd == "external")) {
-        # Nothing to stop for external pages
-        showNotification("Closed page.", type = "message")
-        current_key(NULL)
-        return()
+      if (!(key %in% external_keys)) {
+        stop_child(key)
+        showNotification("Stopped app.", type = "message")
+      } else {
+        showNotification("External link has no local app to stop.", type = "message")
       }
-      
-      stop_child(key)
-      showNotification("Stopped app.", type = "message")
       current_key(NULL)
     })
     
@@ -390,23 +549,15 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       key <- input$launch_app
       if (is.null(key) || !key %in% app_registry$key) return()
       
-      idx <- match(key, app_registry$key)
-      knd <- app_registry$kind[idx]
-      
-      if (isTRUE(knd == "external")) {
-        current_key(key)
-        showNotification("Opening…", type = "message", duration = 2)
-        return()
-      }
-      
       start_child(key)
       current_key(key)
       showNotification("Launching…", type = "message", duration = 2)
     }, ignoreInit = TRUE)
     
     session$onSessionEnded(function() {
-      # Clean up child apps when hub closes
-      for (k in app_registry$key[app_registry$kind == "local"]) stop_child(k)
+      for (k in app_registry$key) {
+        if (!(k %in% external_keys)) stop_child(k)
+      }
     })
   }
   
