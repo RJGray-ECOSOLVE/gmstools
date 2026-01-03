@@ -102,7 +102,7 @@ gms_setup <- function(scope  = c("all", "apps", "hub"),
 
   # Common app deps (Shiny + flexdashboard + wrangling + viz + GIS + export)
   # Based on all gmstools apps we’ve built: intel dashboard, search router,
-  # network app V2, data model builder, admin_panel, etc.
+  # network app V2, data model builder, admin_panel, hash_overlap_hub, etc.
   deps_apps_core <- c(
     # Rmd / flexdashboard toolchain
     "rmarkdown", "knitr", "flexdashboard", "htmlwidgets",
@@ -112,11 +112,17 @@ gms_setup <- function(scope  = c("all", "apps", "hub"),
     "shinycssloaders",
 
     # Wrangling / tidy
-    "dplyr", "tidyr", "purrr", "tibble", "stringr", "readr",
+    "dplyr", "tidyr", "purrr", "tibble", "stringr", "readr", "readxl",
     "glue", "lubridate",
 
     # Web / parsing / IO
     "rvest", "curl", "httr", "jsonlite", "zip",
+
+    # Hashing / crypto utilities (for shared hash DB apps)
+    "digest",
+
+    # Google Sheets backend for shared hash DB
+    "googlesheets4",
 
     # Viz
     "ggplot2", "scales", "RColorBrewer", "echarts4r",
