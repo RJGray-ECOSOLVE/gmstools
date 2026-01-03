@@ -13,8 +13,9 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
   
   `%||%` <- function(x, y) if (is.null(x)) y else x
   
-  # ---- App registry (workflow order 1 -> 6) ----
-  # Flow: establish template, search, record to DMS, analyse, OSINT networks, QA/management
+  # ---- App registry (workflow order 1 -> 8) ----
+  # Flow: establish template, search, record to DMS, analyse, OSINT networks, QA/management,
+  #       shared URL overlap, public ECOSOLVE dashboard
   app_registry <- tibble::tibble(
     key   = c(
       "data_model",
@@ -22,16 +23,20 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       "ecosolve_gms",
       "intel_dashboard",
       "network_v2",
-      "admin_panel"
+      "admin_panel",
+      "hash_app",
+      "ecosolve_dash"
     ),
-    step  = c(1, 2, 3, 4, 5, 6),
+    step  = c(1, 2, 3, 4, 5, 6, 7, 8),
     title = c(
       "Data Model Builder",
       "GMS Search Router",
       "Eco-Solve Global Monitoring System",
       "Intel Dashboard",
       "OSINT Friend Networks",
-      "GMS Admin & QA Panel"
+      "GMS Admin & QA Panel",
+      "URL Hash Overlap Hub",
+      "ECOSOLVE Dashboard"
     ),
     desc  = c(
       "Define what data the team will capture and standardise field templates.",
@@ -39,7 +44,9 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       "Enter validated ads into the Data Management System, monitor operational cases, and use the AI webscraper.",
       "Explore, visualise, and summarise captured data for IWT intelligence.",
       "Identify trafficker networks and POI accounts from social graphs.",
-      "Run quality control and assurance checks, review coverage, and support management decisions."
+      "Run quality control and assurance checks, review coverage, and support management decisions.",
+      "Hash URLs, push sanitized hashes to a shared backend, and see overlaps with partner organisations.",
+      "View high-level ECOSOLVE indicators and dashboards."
     ),
     cta   = c(
       "Establish data model",
@@ -47,7 +54,9 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       "Record & monitor data",
       "Analyse data",
       "Map trafficker networks",
-      "Review QA & management"
+      "Review QA & management",
+      "Check shared URL overlaps",
+      "Open ECOSOLVE dashboard"
     ),
     icon  = c(
       "layer-group",       # stacked model
@@ -55,17 +64,20 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       "database",
       "chart-line",
       "project-diagram",
-      "clipboard-check"
+      "clipboard-check",
+      "key",
+      "gauge-high"
     )
   )
   
   # External website keys (no child process)
-  external_keys <- c("ecosolve_gms")
+  external_keys <- c("ecosolve_gms", "ecosolve_dash")
   
   external_url <- function(key) {
     switch(
       key,
-      "ecosolve_gms" = "https://gms.ecosolve.eco/login",
+      "ecosolve_gms"  = "https://gms.ecosolve.eco/login",
+      "ecosolve_dash" = "https://www.ecosolve.eco/dashboard",
       NULL
     )
   }
@@ -121,6 +133,10 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
       ),
       "admin_panel"     = sprintf(
         "shiny::runApp(gmstools::admin_panel(), port=%d, host='127.0.0.1', launch.browser=FALSE)",
+        child_port
+      ),
+      "hash_app"        = sprintf(
+        "shiny::runApp(gmstools::hash_app(), port=%d, host='127.0.0.1', launch.browser=FALSE)",
         child_port
       ),
       stop("Unknown app key: ", key, call. = FALSE)
@@ -404,7 +420,7 @@ gms_app_hub <- function(launch.browser = TRUE, port = NULL) {
             tags$div(class = "h1", "GMS App Hub"),
             tags$p(
               class = "hub-sub",
-              "Step through the GMS workflow: define data, search, record, analyse, map networks, and run QA/management checks."
+              "Step through the GMS workflow: define data, search, record, analyse, map networks, run QA/management checks, and coordinate on shared URLs."
             )
           )
         ),
