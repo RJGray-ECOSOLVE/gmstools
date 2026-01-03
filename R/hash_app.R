@@ -2,7 +2,7 @@ hash_app <- function(){
 # =======================================================================
 # IWT Hash Overlap Hub - Multi-organization URL hash coordination app
 # =======================================================================
-
+options(shiny.maxRequestSize = 1024^3)
 # -----------------------------------------------------------------------
 # Package setup - install missing packages on a fresh R instance
 # -----------------------------------------------------------------------
@@ -1309,4 +1309,5 @@ server <- function(input, output, session) {
 # Launch app
 # -----------------------------------------------------------------------
 shinyApp(ui = ui, server = server)
+
 }
